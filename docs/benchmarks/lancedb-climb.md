@@ -169,3 +169,33 @@ reduction). For 10% mutations, all three pairs improved; median ratios were
 The existing incremental-versus-clean-rebuild test kept the exact root gate
 green, as did the full suite and Clippy. Clean build, reads, queries, and stored
 bytes do not use the new reuse input. Rung 4 is accepted.
+
+## Rung 5 hypothesis: update only changed canonical tree paths
+
+Rung 4 still recomputes every LSH signature and rebuilds all point/index trees.
+The remaining 1% mutation cost is about 0.6 seconds in paired candidate runs.
+Version 1's path layout makes a narrower update possible: each typed ID has one
+point hash prefix and one bucket per table. Applying the net batch to builders
+seeded from the previous root can rewrite only affected point prefixes,
+signature buckets, signature prefixes, tables, and their ancestors.
+
+Hypothesis: track the original value on first mutation of each ID, discard net
+no-ops, write new point trees only for final upserts, and patch the old/new LSH
+signatures. Clean rebuild equivalence remains the oracle for exact root bytes.
+Expected gain is proportional to the changed fraction. The tradeoff is more
+update code, bounded by focused root-equivalence tests across payload-only,
+vector, insert, delete, filter-delete, and canceling batches.
+
+### Result: accepted
+
+Five interleaved 1% pairs all improved: median candidate/baseline ratios were
+0.380 for upsert (62.0% reduction) and 0.393 for delete (60.7% reduction).
+Three interleaved 10% pairs all improved: median ratios were 0.693 for upsert
+(30.7% reduction) and 0.640 for delete (36.0% reduction). The final unchanged
+harness run is `target/lancedb-results/smoke-20260721T235226Z`; its p50 values
+are 195.077/185.667 ms at 1% and 667.297/577.659 ms at 10%.
+
+Exact oracle checks, filtered exact checks, approximate outputs, roots, and all
+tests are green. New focused tests cover a mixed insert/vector/payload/delete-ID/
+delete-filter batch, deletion to an empty root, insertion from empty, full index
+validation, and a delete-then-restore net no-op. Rung 5 is accepted.

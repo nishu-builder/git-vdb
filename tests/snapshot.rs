@@ -1,6 +1,6 @@
 use git_vdb::{
-    CollectionConfig, Database, Point, PointId, Query, QueryParams, Snapshot, SnapshotEngine,
-    SnapshotMutation,
+    CollectionConfig, Condition, Database, Filter, Point, PointId, Query, QueryParams, Snapshot,
+    SnapshotEngine, SnapshotMutation,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -154,4 +154,58 @@ fn materialized_directory_preserves_root_and_is_independently_queryable() {
     let rebuilt_directory = output_parent.path().join("rebuilt");
     let rebuilt = SnapshotEngine::build_directory(&rebuilt_directory, config(), points).unwrap();
     assert_eq!(rebuilt.root(), snapshot.root());
+}
+
+#[test]
+fn incremental_tree_updates_match_clean_roots_for_mixed_and_boundary_batches() {
+    let object_database = TempDir::new().unwrap();
+    let engine = SnapshotEngine::init(object_database.path()).unwrap();
+    let a = point("a", [1.0, 0.0], "keep");
+    let b = point("b", [0.0, 1.0], "delete-id");
+    let c = point("c", [0.5, 0.5], "delete-filter");
+    let initial = engine.build(config(), vec![a.clone(), b, c]).unwrap();
+    let changed_a = point("a", [0.9, 0.1], "changed");
+    let d = point("d", [0.8, 0.2], "inserted");
+    let mixed = initial
+        .apply(vec![
+            SnapshotMutation::delete_ids([PointId::from("b")]),
+            SnapshotMutation::delete_filter(Filter::must([Condition::matches(
+                "topic",
+                "delete-filter",
+            )])),
+            SnapshotMutation::upsert(changed_a.clone()),
+            SnapshotMutation::upsert(d.clone()),
+        ])
+        .unwrap();
+    assert_eq!(
+        mixed.root(),
+        engine
+            .build(config(), vec![changed_a.clone(), d.clone()])
+            .unwrap()
+            .root()
+    );
+    assert!(mixed.validate(true).unwrap().valid);
+
+    let canceled = mixed
+        .apply(vec![
+            SnapshotMutation::delete_ids([PointId::from("a")]),
+            SnapshotMutation::upsert(changed_a),
+        ])
+        .unwrap();
+    assert_eq!(canceled.root(), mixed.root());
+
+    let empty = mixed
+        .apply(vec![SnapshotMutation::delete_ids([
+            PointId::from("a"),
+            PointId::from("d"),
+        ])])
+        .unwrap();
+    assert_eq!(empty.root(), engine.build(config(), vec![]).unwrap().root());
+    let inserted = empty
+        .apply(vec![SnapshotMutation::upsert(d.clone())])
+        .unwrap();
+    assert_eq!(
+        inserted.root(),
+        engine.build(config(), vec![d]).unwrap().root()
+    );
 }

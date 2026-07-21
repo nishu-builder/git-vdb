@@ -63,6 +63,11 @@ pub(crate) struct StoredPoint {
     pub(crate) tree: Oid,
 }
 
+pub(crate) struct PointChange {
+    pub(crate) old: Option<Point>,
+    pub(crate) new: Option<Point>,
+}
+
 pub(crate) fn diff_roots(repo: &Repository, left: Oid, right: Oid) -> Result<DiffResult> {
     let left_points = read_stored_points(repo, left)?;
     let right_points = read_stored_points(repo, right)?;
@@ -340,6 +345,160 @@ pub(crate) fn build_root_reusing(
     let index_tree = index_builder.write()?;
     let meta_blob = repo.blob(&canonical_json(&RootMeta::new(config, points.len()))?)?;
     let mut root = repo.treebuilder(None)?;
+    root.insert("index", index_tree, TREE_MODE)?;
+    root.insert("meta.json", meta_blob, BLOB_MODE)?;
+    root.insert("points", points_tree, TREE_MODE)?;
+    Ok(root.write()?)
+}
+
+pub(crate) fn update_root(
+    repo: &Repository,
+    previous_root: Oid,
+    config: &CollectionConfig,
+    final_point_count: usize,
+    changes: &BTreeMap<PointId, PointChange>,
+) -> Result<Oid> {
+    if changes.is_empty() {
+        return Ok(previous_root);
+    }
+    let projections = lsh_projections(&config.index, config.dimension);
+    let mut new_trees = BTreeMap::new();
+    for (id, change) in changes {
+        if let Some(point) = &change.new {
+            new_trees.insert(id.clone(), write_point_tree(repo, point)?);
+        }
+    }
+
+    let old_points_oid = root_entry_oid(repo, previous_root, "points")?;
+    let old_points_tree = repo.find_tree(old_points_oid)?;
+    let mut points_builder = repo.treebuilder(Some(&old_points_tree))?;
+    let mut point_prefixes: BTreeMap<String, Vec<(&PointId, &PointChange)>> = BTreeMap::new();
+    for (id, change) in changes {
+        let hash = id_hash(id);
+        point_prefixes
+            .entry(hash[..2].to_owned())
+            .or_default()
+            .push((id, change));
+    }
+    for (prefix, prefix_changes) in point_prefixes {
+        let old_prefix = old_points_tree.get_name(&prefix).map(|entry| entry.id());
+        let old_prefix_tree = old_prefix.map(|oid| repo.find_tree(oid)).transpose()?;
+        let mut prefix_builder = repo.treebuilder(old_prefix_tree.as_ref())?;
+        for (id, change) in prefix_changes {
+            let hash = id_hash(id);
+            if change.new.is_some() {
+                prefix_builder.insert(&hash, new_trees[id], TREE_MODE)?;
+            } else {
+                prefix_builder.remove(&hash)?;
+            }
+        }
+        if prefix_builder.is_empty() {
+            points_builder.remove(&prefix)?;
+        } else {
+            points_builder.insert(&prefix, prefix_builder.write()?, TREE_MODE)?;
+        }
+    }
+    let points_tree = points_builder.write()?;
+
+    type EntryUpdates = BTreeMap<String, Option<Oid>>;
+    type BucketUpdates = BTreeMap<usize, BTreeMap<String, EntryUpdates>>;
+    type PrefixUpdates = BTreeMap<String, Vec<(String, EntryUpdates)>>;
+    let mut bucket_updates = BucketUpdates::new();
+    for (id, change) in changes {
+        let hash = id_hash(id);
+        for (table, hyperplanes) in projections.iter().enumerate() {
+            let old_signature = change
+                .old
+                .as_ref()
+                .map(|point| lsh_signature_with(&point.vector, hyperplanes));
+            let new_signature = change
+                .new
+                .as_ref()
+                .map(|point| lsh_signature_with(&point.vector, hyperplanes));
+            if let Some(signature) = old_signature {
+                if new_signature != Some(signature) {
+                    bucket_updates
+                        .entry(table)
+                        .or_default()
+                        .entry(signature_name(signature, config.index.signature_bits))
+                        .or_default()
+                        .insert(hash.clone(), None);
+                }
+            }
+            if let Some(signature) = new_signature {
+                bucket_updates
+                    .entry(table)
+                    .or_default()
+                    .entry(signature_name(signature, config.index.signature_bits))
+                    .or_default()
+                    .insert(hash.clone(), Some(new_trees[id]));
+            }
+        }
+    }
+
+    let old_index_oid = root_entry_oid(repo, previous_root, "index")?;
+    let old_index_tree = repo.find_tree(old_index_oid)?;
+    let old_lsh_oid = tree_child_oid(repo, old_index_oid, "lsh-v1")?;
+    let old_lsh_tree = repo.find_tree(old_lsh_oid)?;
+    let mut lsh_builder = repo.treebuilder(Some(&old_lsh_tree))?;
+    for (table, signatures) in bucket_updates {
+        let table_name = format!("{table:04x}");
+        let old_table = old_lsh_tree.get_name(&table_name).map(|entry| entry.id());
+        let old_table_tree = old_table.map(|oid| repo.find_tree(oid)).transpose()?;
+        let mut table_builder = repo.treebuilder(old_table_tree.as_ref())?;
+        let mut prefixes = PrefixUpdates::new();
+        for (signature, updates) in signatures {
+            prefixes
+                .entry(signature[..2.min(signature.len())].to_owned())
+                .or_default()
+                .push((signature, updates));
+        }
+        for (prefix, signatures) in prefixes {
+            let old_prefix = old_table_tree
+                .as_ref()
+                .and_then(|tree| tree.get_name(&prefix))
+                .map(|entry| entry.id());
+            let old_prefix_tree = old_prefix.map(|oid| repo.find_tree(oid)).transpose()?;
+            let mut prefix_builder = repo.treebuilder(old_prefix_tree.as_ref())?;
+            for (signature, updates) in signatures {
+                let old_bucket = old_prefix_tree
+                    .as_ref()
+                    .and_then(|tree| tree.get_name(&signature))
+                    .map(|entry| entry.id());
+                let old_bucket_tree = old_bucket.map(|oid| repo.find_tree(oid)).transpose()?;
+                let mut bucket_builder = repo.treebuilder(old_bucket_tree.as_ref())?;
+                for (hash, point_tree) in updates {
+                    if let Some(point_tree) = point_tree {
+                        bucket_builder.insert(&hash, point_tree, TREE_MODE)?;
+                    } else {
+                        bucket_builder.remove(&hash)?;
+                    }
+                }
+                if bucket_builder.is_empty() {
+                    prefix_builder.remove(&signature)?;
+                } else {
+                    prefix_builder.insert(&signature, bucket_builder.write()?, TREE_MODE)?;
+                }
+            }
+            if prefix_builder.is_empty() {
+                table_builder.remove(&prefix)?;
+            } else {
+                table_builder.insert(&prefix, prefix_builder.write()?, TREE_MODE)?;
+            }
+        }
+        if table_builder.is_empty() {
+            lsh_builder.remove(&table_name)?;
+        } else {
+            lsh_builder.insert(&table_name, table_builder.write()?, TREE_MODE)?;
+        }
+    }
+    let lsh_tree = lsh_builder.write()?;
+    let mut index_builder = repo.treebuilder(Some(&old_index_tree))?;
+    index_builder.insert("lsh-v1", lsh_tree, TREE_MODE)?;
+    let index_tree = index_builder.write()?;
+    let meta_blob = repo.blob(&canonical_json(&RootMeta::new(config, final_point_count))?)?;
+    let old_root_tree = repo.find_tree(previous_root)?;
+    let mut root = repo.treebuilder(Some(&old_root_tree))?;
     root.insert("index", index_tree, TREE_MODE)?;
     root.insert("meta.json", meta_blob, BLOB_MODE)?;
     root.insert("points", points_tree, TREE_MODE)?;

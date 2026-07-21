@@ -1,7 +1,7 @@
 use crate::filter::matches_filter;
 use crate::root::{
-    build_root, build_root_reusing, count_root, get_root, query_root_with_cache, read_meta,
-    read_stored_points, validate_config, validate_point, validate_root,
+    build_root, count_root, get_root, query_root_with_cache, read_meta, read_stored_points,
+    update_root, validate_config, validate_point, validate_root, PointChange,
 };
 use crate::{
     CollectionConfig, CountResult, Error, GetRequest, GetResult, ObjectId, Point, PointId, Query,
@@ -123,12 +123,11 @@ impl SnapshotEngine {
         let config = read_meta(&repo, previous_root)?.config();
         let stored_points = read_stored_points(&repo, previous_root)?;
         let mut points = BTreeMap::new();
-        let mut reusable_point_trees = BTreeMap::new();
         for (id, stored) in stored_points {
-            reusable_point_trees.insert(id.clone(), stored.tree);
             points.insert(id, stored.point);
         }
         let mut upsert_ids = BTreeSet::new();
+        let mut originals = BTreeMap::new();
 
         for mutation in mutations {
             match mutation {
@@ -140,7 +139,9 @@ impl SnapshotEngine {
                             point.id
                         )));
                     }
-                    reusable_point_trees.remove(&point.id);
+                    if !originals.contains_key(&point.id) {
+                        originals.insert(point.id.clone(), points.get(&point.id).cloned());
+                    }
                     points.insert(point.id.clone(), point);
                 }
                 SnapshotMutation::DeleteIds { ids } => {
@@ -150,16 +151,36 @@ impl SnapshotEngine {
                         ));
                     }
                     for id in ids {
+                        if !originals.contains_key(&id) {
+                            originals.insert(id.clone(), points.get(&id).cloned());
+                        }
                         points.remove(&id);
                     }
                 }
                 SnapshotMutation::DeleteFilter { filter } => {
-                    points.retain(|id, point| !matches_filter(&filter, id, &point.payload));
+                    let ids = points
+                        .iter()
+                        .filter(|(id, point)| matches_filter(&filter, id, &point.payload))
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>();
+                    for id in ids {
+                        if !originals.contains_key(&id) {
+                            originals.insert(id.clone(), points.get(&id).cloned());
+                        }
+                        points.remove(&id);
+                    }
                 }
             }
         }
 
-        let root = build_root_reusing(&repo, &config, &points, &reusable_point_trees)?;
+        let changes = originals
+            .into_iter()
+            .filter_map(|(id, old)| {
+                let new = points.get(&id).cloned();
+                (old != new).then_some((id, PointChange { old, new }))
+            })
+            .collect();
+        let root = update_root(&repo, previous_root, &config, points.len(), &changes)?;
         Ok(self.snapshot(root, Some(points)))
     }
 
