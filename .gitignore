@@ -1,4 +1,6 @@
 /target/
+/.direnv/
+/result
+/result-*
 *.profraw
 benchmark-*.json
-

@@ -18,28 +18,26 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  quality:
-    name: Format and lint
-    runs-on: ubuntu-latest
+  nix:
+    name: Nix checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust components
-        run: rustup update stable --no-self-update && rustup component add rustfmt clippy
-      - name: Check formatting
-        run: cargo fmt --all --check
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Build and check
+        run: nix flake check --print-build-logs
 
-  test:
-    name: Test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  windows:
+    name: Cargo compatibility (windows-latest)
+    runs-on: windows-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,19 +47,3 @@ jobs:
         run: rustup update stable --no-self-update
       - name: Run tests
         run: cargo test --all-targets --all-features --locked
-
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-    env:
-      RUSTDOCFLAGS: -D warnings
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install stable Rust
-        run: rustup update stable --no-self-update
-      - name: Build API documentation
-        run: cargo doc --all-features --no-deps --locked
-

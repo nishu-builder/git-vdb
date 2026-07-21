@@ -19,26 +19,28 @@ application-specific concepts belong elsewhere.
 
 ## Development setup
 
-Install stable Rust and Git. Building `git2` also requires the native build
-tools expected by `libgit2-sys` on your platform.
+Install Nix with flakes enabled, then enter the pinned development environment:
 
 ```sh
 git clone https://github.com/nishu-builder/git-vdb.git
 cd git-vdb
-cargo build
-cargo test
+nix develop
 ```
 
-Before submitting a pull request, run:
+Inside the shell, Cargo works normally. The canonical build and validation
+commands are:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
+nix build
+nix flake check
 ```
 
-CI runs the Rust checks on Linux, macOS, and Windows.
+`flake.lock` and `rust-toolchain.toml` pin the build inputs and compiler. Nix
+flake source filtering includes tracked files and edits to tracked files, but
+not new untracked files; stage a newly added source file before building it.
+
+CI runs `nix flake check` on Linux and macOS. A separate Cargo job preserves
+Windows compatibility.
 
 ## Tests and determinism
 

@@ -123,8 +123,8 @@ roots in both layers.
 Build the CLI and create a three-dimensional collection:
 
 ```sh
-cargo build --release
-VDB=./target/release/git-vdb
+nix build
+VDB=./result/bin/git-vdb
 
 $VDB init ./demo-vectors.git --bare
 $VDB --repo ./demo-vectors.git collection create products --dimension 3
@@ -258,14 +258,29 @@ findings are recorded in [docs/findings.md](docs/findings.md).
 
 ## Install and contribute
 
-Install the latest revision from source:
+The flake is the canonical build and development interface:
+
+```sh
+nix run github:nishu-builder/git-vdb -- --help
+nix develop
+nix flake check
+```
+
+`flake.lock` pins Nixpkgs, Crane, the Rust overlay, and the compiler toolchain.
+`nix build` produces the CLI at `./result/bin/git-vdb`; `nix run` executes it;
+`nix develop` provides Cargo, rustfmt, Clippy, rust-analyzer, and Git; and
+`nix flake check` runs the package build, formatting, Clippy,
+tests, and rustdoc checks.
+
+Cargo remains usable inside the development shell and on Windows. A direct
+Cargo installation is also available:
 
 ```sh
 cargo install --git https://github.com/nishu-builder/git-vdb.git --locked
 ```
 
-Pin a commit or release tag for reproducible production use. Prebuilt binaries
-and a crates.io package are not published yet.
+Pin the flake input, commit, or release tag for reproducible production use.
+Prebuilt binaries and a crates.io package are not published yet.
 
 Development setup, invariants, and validation commands are in
 [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as
