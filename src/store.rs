@@ -168,10 +168,7 @@ impl Database {
         let mut names = Vec::new();
         for reference in repo.references_glob("refs/git-vdb/collections/*")? {
             let reference = reference?;
-            if let Some(name) = reference
-                .name()
-                .and_then(|name| name.strip_prefix("refs/git-vdb/collections/"))
-            {
+            if let Some(name) = reference.name()?.strip_prefix("refs/git-vdb/collections/") {
                 names.push(name.to_owned());
             }
         }

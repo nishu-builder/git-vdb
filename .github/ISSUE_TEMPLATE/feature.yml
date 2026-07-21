@@ -1,0 +1,61 @@
+name: Feature proposal
+description: Propose a focused improvement to the embedded database.
+title: "proposal: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem or limitation should be addressed?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the API, CLI, storage, or query behavior concretely.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include workarounds and why they are insufficient.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Compatibility impact
+      options:
+        - No public API, CLI, or format impact
+        - Public API change
+        - CLI change
+        - New backward-compatible format version
+        - Changes existing format semantics
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: determinism
+    attributes:
+      label: Determinism and Git implications
+      description: Explain effects on root identity, structural sharing, lazy reads, history, and transfer.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Link measurements, examples, related systems, or prior art when available.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope checklist
+      options:
+        - label: This belongs in the embedded database rather than an application adapter or service.
+          required: true
+        - label: I searched existing issues and proposals.
+          required: true
+

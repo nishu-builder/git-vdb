@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible defect in git-vdb.
+title: "bug: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Do not include secrets, private payloads, or production repositories. Report vulnerabilities through the private security form.
+  - type: input
+    id: version
+    attributes:
+      label: Version or revision
+      description: Output from `git-vdb --version`, a release, or a commit SHA.
+      placeholder: git-vdb 0.1.0 or 2a6bc3a
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, Rust version, and Git version.
+      placeholder: macOS arm64; rustc 1.x; git 2.x
+    validations:
+      required: true
+  - type: dropdown
+    id: repository-kind
+    attributes:
+      label: Repository kind
+      options:
+        - Bare
+        - Non-bare
+        - Both
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include commands or Rust code, sanitized input, and the smallest reproducible sequence.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include complete diagnostics and resolved root IDs when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Filters, collection configuration, concurrency, historical roots, or other useful details.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed secrets and private data from this report.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+

@@ -1,5 +1,9 @@
 # git-vdb
 
+[![CI](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml)
+[![Supply chain](https://github.com/nishu-builder/git-vdb/actions/workflows/supply-chain.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/supply-chain.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 `git-vdb` is an embedded vector database whose immutable collection snapshots
 are ordinary Git trees. It exposes collections, typed point IDs, dense vectors,
 JSON payloads, upsert/get/delete/count, Qdrant-shaped filters, exact cosine
@@ -12,6 +16,24 @@ parented to the prior collection commit, and compare-and-swap updates
 the same configuration and point set produce the same object ID regardless of
 input order, history, path, or bare versus non-bare repository layout.
 
+The project is early-stage and welcomes focused feedback and contributions.
+See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md),
+[Code of Conduct](CODE_OF_CONDUCT.md), [Support](SUPPORT.md),
+[Roadmap](ROADMAP.md), and [Changelog](CHANGELOG.md).
+
+## Install
+
+Build the latest revision from source:
+
+```sh
+cargo install --git https://github.com/nishu-builder/git-vdb.git --locked
+git-vdb --help
+```
+
+For reproducible production use, pin a commit or release tag rather than
+installing a moving branch. Prebuilt binaries and a crates.io package are not
+published yet.
+
 ## Install and develop
 
 Requires stable Rust, libgit2's build prerequisites, and Git for the transport
@@ -19,9 +41,10 @@ integration tests.
 
 ```sh
 cargo build --release
-cargo test
-cargo fmt --check
+cargo test --all-targets --all-features
+cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 ```
 
 ## Rust API
@@ -133,3 +156,18 @@ LSH defaults are deterministic rather than claimed production-tuned; the
 100,000-point recall target has not yet been demonstrated. These limits are
 recorded rather than hidden in canonical behavior.
 
+## Community and project policy
+
+Bug reports and scoped proposals belong in
+[GitHub Issues](https://github.com/nishu-builder/git-vdb/issues). Please read
+[SUPPORT.md](SUPPORT.md) before posting and use private vulnerability reporting
+for security issues. Pull requests are expected to preserve the deterministic
+root, immutable-history, atomic-ref, lazy-read, and exact-oracle invariants
+described in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Dependencies and GitHub Actions are monitored by Dependabot. CI runs formatting,
+Clippy, documentation, and the test suite across Linux, macOS, and Windows;
+cargo-deny checks advisories, licenses, duplicate versions, and dependency
+sources.
+
+Licensed under the [Apache License 2.0](LICENSE).
