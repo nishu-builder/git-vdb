@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nishu-builder/git-vdb/benchmarks/lancedb/workload.schema.json",
+  "title": "git-vdb LanceDB differential workload",
+  "type": "object",
+  "required": ["schema_version", "name", "repetitions", "cases", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {"type": "string", "minLength": 1},
+    "repetitions": {"type": "integer", "minimum": 1},
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "dataset", "points", "dimension", "queries"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "dataset": {"enum": ["synthetic_uniform", "synthetic_clustered", "glove_25_angular"]},
+          "points": {"type": "integer", "minimum": 1},
+          "dimension": {"type": "integer", "minimum": 1},
+          "queries": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "steps": {
+      "type": "object",
+      "required": ["k", "mutation_fractions", "filter_selectivities", "concurrency"],
+      "additionalProperties": false,
+      "properties": {
+        "k": {"type": "array", "items": {"enum": [1, 10, 100]}, "minItems": 1, "uniqueItems": true},
+        "mutation_fractions": {"type": "array", "items": {"enum": [0.01, 0.1, 1.0]}, "minItems": 1, "uniqueItems": true},
+        "filter_selectivities": {"type": "array", "items": {"enum": [0.5, 0.1, 0.01, 0.001]}, "minItems": 1, "uniqueItems": true},
+        "concurrency": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "uniqueItems": true}
+      }
+    }
+  }
+}

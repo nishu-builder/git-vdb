@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "synthetic": {
+    "generator": "benchmarks/lancedb/harness.py",
+    "seed": "0x676974766462626d",
+    "distributions": ["uniform", "clustered"],
+    "payload_rule": "selectivity_bucket = uint64_id modulo 1000"
+  },
+  "real": {
+    "glove_25_angular": {
+      "url": "http://ann-benchmarks.com/glove-25-angular.hdf5",
+      "sha256": "51004cb0ae962159f0db507a51fec2b395de14b166f55976c89f16bd2f8b6391",
+      "upstream": "https://github.com/erikbern/ann-benchmarks",
+      "source_notes": "ANN-Benchmarks' angular conversion of 25-dimensional GloVe word vectors. Review the upstream dataset and GloVe source terms before redistribution; the harness downloads it outside Git."
+    }
+  }
+}

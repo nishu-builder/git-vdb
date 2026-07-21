@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "name": "smoke",
+  "repetitions": 3,
+  "cases": [
+    {
+      "name": "clustered-1000x100",
+      "dataset": "synthetic_clustered",
+      "points": 1000,
+      "dimension": 100,
+      "queries": 12
+    },
+    {
+      "name": "uniform-1000x100",
+      "dataset": "synthetic_uniform",
+      "points": 1000,
+      "dimension": 100,
+      "queries": 12
+    }
+  ],
+  "steps": {
+    "k": [1, 10, 100],
+    "mutation_fractions": [0.01, 0.1, 1.0],
+    "filter_selectivities": [0.5, 0.1, 0.01, 0.001],
+    "concurrency": [1]
+  }
+}

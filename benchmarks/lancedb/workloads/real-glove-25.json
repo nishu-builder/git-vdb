@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "real-glove-25-angular",
+  "repetitions": 5,
+  "cases": [
+    {"name": "glove-25-angular-100000", "dataset": "glove_25_angular", "points": 100000, "dimension": 25, "queries": 100}
+  ],
+  "steps": {
+    "k": [1, 10, 100],
+    "mutation_fractions": [0.01, 0.1, 1.0],
+    "filter_selectivities": [0.5, 0.1, 0.01, 0.001],
+    "concurrency": [1, 4]
+  }
+}

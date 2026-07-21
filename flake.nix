@@ -91,8 +91,10 @@
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
           packages = [
+            pkgs.curl
             pkgs.git
             pkgs.rust-analyzer
+            pkgs.uv
           ];
         };
       }

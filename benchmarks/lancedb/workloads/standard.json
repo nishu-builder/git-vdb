@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "standard",
+  "repetitions": 5,
+  "cases": [
+    {"name": "clustered-1000x100", "dataset": "synthetic_clustered", "points": 1000, "dimension": 100, "queries": 100},
+    {"name": "clustered-10000x100", "dataset": "synthetic_clustered", "points": 10000, "dimension": 100, "queries": 100},
+    {"name": "clustered-100000x100", "dataset": "synthetic_clustered", "points": 100000, "dimension": 100, "queries": 100},
+    {"name": "clustered-1000x384", "dataset": "synthetic_clustered", "points": 1000, "dimension": 384, "queries": 100},
+    {"name": "clustered-10000x384", "dataset": "synthetic_clustered", "points": 10000, "dimension": 384, "queries": 100},
+    {"name": "clustered-100000x384", "dataset": "synthetic_clustered", "points": 100000, "dimension": 384, "queries": 100},
+    {"name": "clustered-1000x768", "dataset": "synthetic_clustered", "points": 1000, "dimension": 768, "queries": 100},
+    {"name": "clustered-10000x768", "dataset": "synthetic_clustered", "points": 10000, "dimension": 768, "queries": 100},
+    {"name": "clustered-100000x768", "dataset": "synthetic_clustered", "points": 100000, "dimension": 768, "queries": 100}
+  ],
+  "steps": {
+    "k": [1, 10, 100],
+    "mutation_fractions": [0.01, 0.1, 1.0],
+    "filter_selectivities": [0.5, 0.1, 0.01, 0.001],
+    "concurrency": [1, 4]
+  }
+}
