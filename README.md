@@ -57,6 +57,46 @@ commit records history about that state; the ref names the current state.**
 | `query` | root, vector, filter | scored points | none |
 | named collection write | collection name, mutations | root and commit | atomically advances one collection ref |
 
+### Named command semantics
+
+- `collection create` creates an empty deterministic root, commits it, and
+  creates the collection ref. It fails if that name already exists. `collection
+  list` and `collection info` read collection refs and root metadata.
+- `upsert` is both add and replace. A new typed ID is inserted; an existing
+  typed ID is replaced by the submitted vector and payload. The whole batch is
+  validated before the collection ref advances. Empty batches and duplicate IDs
+  within one batch are rejected.
+- `get` retrieves points without similarity scoring. IDs and a filter combine as
+  an intersection. Results use canonical typed-ID order, then `offset` and
+  `limit`; vectors and payloads are returned only when requested.
+- `query` returns at most `limit` filter-eligible points ranked by descending
+  cosine similarity, with canonical typed-ID order breaking equal-score ties.
+  `--exact` scores every eligible point. Approximate mode uses deterministic LSH
+  candidate discovery under explicit probe and candidate limits, so it may not
+  return the true global top-k. Every result reports the resolved root and work
+  statistics.
+- `count` returns the number of points at the resolved root, optionally matching
+  a filter. It performs no ranking.
+- `delete` removes the union of the submitted IDs and filter matches. Missing IDs
+  are ignored. A selector with neither IDs nor a filter is rejected. A successful
+  no-op delete still creates a named-collection commit whose tree may equal its
+  parent’s tree.
+- `--expect-root` on `upsert` and `delete` rejects a stale writer before the ref
+  update. The ref is also updated with an atomic compare-and-swap, so concurrent
+  writers cannot silently overwrite one another.
+- `--at <root-or-commit>` makes `get`, `count`, `query`, and `validate` read a
+  historical immutable state. Historical collection views are read-only.
+- `history` walks collection commits newest-first. `diff` compares two roots or
+  commits and reports added, removed, and changed IDs plus structural reuse.
+  `validate --full` additionally recomputes and checks every LSH bucket entry.
+- `collection delete` deletes only the named ref. Its commits and trees remain
+  subject to normal Git reachability and garbage collection.
+
+Point reads, counts, queries, and validations identify the root they actually
+read. Validation or write errors leave the collection ref unchanged; Git objects
+produced before a failed ref update can remain unreachable until normal garbage
+collection.
+
 The snapshot operations do not require a collection name, commit, ref, clock,
 or repository history. Previous roots remain valid after `apply`. Reads never
 change objects or refs.
@@ -165,16 +205,10 @@ assert_eq!(result.root, next.root());
 temporary one for the lifetime of its snapshots. Exact-root APIs accept only a
 full tree object ID. They intentionally do not resolve commits or symbolic refs.
 
-## Data and query semantics
+## Data model
 
 A point has a typed string or unsigned-integer ID, one dense `f32` vector, and a
 JSON object payload. String `"42"` and integer `42` are distinct IDs.
-
-Format version 1 uses cosine similarity. Exact search is the correctness oracle
-and can be forced with `--exact`. Above the root’s configured full-scan
-threshold, queries default to deterministic random-hyperplane LSH. Approximate
-queries expose explicit probe and unique-candidate limits and report how much
-work they performed.
 
 Filters support scalar `match`, numeric `range`, `has_id`, nested groups, and
 `must` / `should` / `must_not`. Dot-separated field paths traverse nested JSON
