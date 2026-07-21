@@ -23,10 +23,8 @@ fn validate_json(value: &Value) -> Result<()> {
                 validate_json(value)?;
             }
         }
-        Value::Number(number) => {
-            if number.as_f64().is_some_and(|n| !n.is_finite()) {
-                return Err(Error::Invalid("JSON numbers must be finite".into()));
-            }
+        Value::Number(number) if number.as_f64().is_some_and(|n| !n.is_finite()) => {
+            return Err(Error::Invalid("JSON numbers must be finite".into()));
         }
         _ => {}
     }
