@@ -165,15 +165,11 @@ pub(crate) fn count_root(
     })
 }
 
-pub(crate) fn query_root(repo: &Repository, root: Oid, query: Query) -> Result<QueryResult> {
-    query_root_with_cache(repo, root, query, None)
-}
-
 pub(crate) fn query_root_with_cache(
     repo: &Repository,
     root: Oid,
     query: Query,
-    cached_points: Option<&OnceLock<BTreeMap<PointId, Point>>>,
+    cached_points: Option<&OnceLock<Vec<Point>>>,
 ) -> Result<QueryResult> {
     let meta = read_meta(repo, root)?;
     validate_query(&query, &meta)?;
@@ -184,7 +180,7 @@ pub(crate) fn query_root_with_cache(
     if exact {
         if let Some(cache) = cached_points {
             if cache.get().is_none() {
-                let points = read_all_points(repo, root)?;
+                let points = read_all_points(repo, root)?.into_values().collect();
                 let _ = cache.set(points);
             }
             exact_query_points(
@@ -565,11 +561,11 @@ fn exact_query_points(
     root: Oid,
     meta: &RootMeta,
     query: Query,
-    points: &BTreeMap<PointId, Point>,
+    points: &[Point],
 ) -> Result<QueryResult> {
     let mut scored = Vec::new();
     let mut vectors_scored = 0;
-    for point in points.values() {
+    for point in points {
         if query
             .filter
             .as_ref()
@@ -1035,6 +1031,36 @@ mod tests {
             collection.upsert_expect(vec![point("b", [0.0, 1.0], "x")], Some(old)),
             Err(Error::StaleRoot { .. })
         ));
+    }
+
+    #[test]
+    fn named_query_cache_tracks_roots_across_clones_and_handles() {
+        let (_temp, db, collection) = database();
+        collection
+            .upsert(vec![point("a", [1.0, 0.0], "first")])
+            .unwrap();
+        let exact = || Query {
+            vector: vec![1.0, 0.0],
+            limit: 10,
+            params: QueryParams {
+                exact: Some(true),
+                ..QueryParams::default()
+            },
+            ..Query::default()
+        };
+        assert_eq!(collection.query(exact()).unwrap().points.len(), 1);
+
+        collection
+            .clone()
+            .upsert(vec![point("b", [0.9, 0.1], "clone")])
+            .unwrap();
+        assert_eq!(collection.query(exact()).unwrap().points.len(), 2);
+
+        db.collection("notes")
+            .unwrap()
+            .upsert(vec![point("c", [0.8, 0.2], "other-handle")])
+            .unwrap();
+        assert_eq!(collection.query(exact()).unwrap().points.len(), 3);
     }
 
     #[test]

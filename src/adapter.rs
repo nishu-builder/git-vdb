@@ -1,9 +1,11 @@
 use crate::root::{
-    count_root, diff_roots, get_root, query_root, read_meta, validate_config, validate_root,
+    count_root, diff_roots, get_root, query_root_with_cache, read_meta, validate_config,
+    validate_root,
 };
 use crate::*;
 use git2::{Commit, Oid, Repository, Signature};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Clone, Copy, Debug)]
 struct ResolvedSnapshot {
@@ -23,6 +25,22 @@ pub struct Collection {
     db: Database,
     name: String,
     historical: Option<ResolvedSnapshot>,
+    query_cache: Arc<Mutex<CollectionQueryCache>>,
+}
+
+#[derive(Debug)]
+struct CollectionQueryCache {
+    root: Option<Oid>,
+    points: Arc<OnceLock<Vec<Point>>>,
+}
+
+impl Default for CollectionQueryCache {
+    fn default() -> Self {
+        Self {
+            root: None,
+            points: Arc::new(OnceLock::new()),
+        }
+    }
 }
 
 impl Database {
@@ -77,6 +95,7 @@ impl Database {
             db: self.clone(),
             name: name.into(),
             historical: None,
+            query_cache: Default::default(),
         })
     }
 
@@ -111,6 +130,7 @@ impl Database {
             db: self.clone(),
             name: name.into(),
             historical: None,
+            query_cache: Default::default(),
         })
     }
 
@@ -162,6 +182,7 @@ impl Collection {
             db: self.db.clone(),
             name: self.name.clone(),
             historical: Some(snapshot),
+            query_cache: Default::default(),
         })
     }
 
@@ -272,7 +293,18 @@ impl Collection {
     pub fn query(&self, query: Query) -> Result<QueryResult> {
         let repo = self.repo()?;
         let snapshot = self.snapshot(&repo)?;
-        query_root(&repo, snapshot.root, query)
+        let points = {
+            let mut cache = self
+                .query_cache
+                .lock()
+                .map_err(|_| Error::Invalid("collection query cache lock is poisoned".into()))?;
+            if cache.root != Some(snapshot.root) {
+                cache.root = Some(snapshot.root);
+                cache.points = Arc::new(OnceLock::new());
+            }
+            cache.points.clone()
+        };
+        query_root_with_cache(&repo, snapshot.root, query, Some(&points))
     }
 
     pub fn history(&self, limit: usize) -> Result<Vec<HistoryEntry>> {

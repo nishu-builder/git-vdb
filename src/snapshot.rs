@@ -35,7 +35,7 @@ pub struct SnapshotEngine {
 pub struct Snapshot {
     object_database: PathBuf,
     root: Oid,
-    points: Arc<OnceLock<BTreeMap<PointId, Point>>>,
+    points: Arc<OnceLock<Vec<Point>>>,
     temporary: Option<Arc<TempDir>>,
 }
 
@@ -181,7 +181,10 @@ impl SnapshotEngine {
 
     /// Queries an exact root ID without first constructing a named collection.
     pub fn query(&self, root: impl AsRef<str>, query: Query) -> Result<QueryResult> {
-        self.open_snapshot(root)?.query(query)
+        let repo = self.repo()?;
+        let root = exact_root(&repo, root.as_ref())?;
+        read_meta(&repo, root)?;
+        query_root_with_cache(&repo, root, query, None)
     }
 
     /// Retrieves records from an exact root ID.
@@ -220,7 +223,7 @@ impl SnapshotEngine {
         let cache = OnceLock::new();
         if let Some(points) = points {
             cache
-                .set(points)
+                .set(points.into_values().collect())
                 .expect("new snapshot point cache must be empty");
         }
         Snapshot {

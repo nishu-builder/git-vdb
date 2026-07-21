@@ -104,3 +104,37 @@ bytes for Rung 2. At this tier, the retained cache did not raise measured peak
 RSS because the runner already keeps the source vectors alive. The full
 clustered runner fell from 21.84 seconds to 14.75 seconds. The gain is far above
 noise with no measured material regression, so Rung 2 is accepted.
+
+## Rung 3 hypothesis: root-keyed named-adapter cache
+
+The new named-adapter measurement at
+`target/lancedb-results/smoke-20260721T233009Z` reports 72.099 ms exact p50,
+versus 0.254 ms for snapshot core. Its profile and code path are the same
+repeated loose-object decoding removed from immutable snapshots in Rung 2.
+
+Hypothesis: collection handles can share a decoded-point cache keyed by the
+resolved root. Every query still resolves the ref first; a changed root replaces
+the cache, so writes through clones or other processes cannot return stale
+points. Historical handles have independent immutable caches. Expected result
+is a named-adapter warm exact gain comparable to Rung 2 without changing ref,
+stale-writer, root, query, or approximate semantics. The memory-lifetime
+tradeoff is limited to each live collection-handle family and measured again.
+
+### Result: accepted after memory refinement
+
+The first implementation used a `BTreeMap` cache and raised paired peak RSS by
+5.2%, so it was rejected before commit. Cached points were changed to a compact
+vector because scoring needs iteration, not key lookup. The resulting paired
+RSS was 33,816,576 bytes versus the 32,391,168-byte baseline, a 4.4% increase
+below the material threshold. This is a real memory tradeoff and remains
+visible rather than being described as free.
+
+Final raw results are in
+`target/lancedb-results/smoke-20260721T233653Z`. Named exact p50 fell from
+72,099 us to 270 us (99.63%), with exact IDs/scores unchanged. Named
+approximate p50 was 9,126.5 us versus 9,085 us (0.46% slower), p95 and p99 both
+improved, and approximate results were identical. Snapshot-core exact p50,
+snapshot-core approximate p50, snapshot build p50, and named build p50 all
+improved in the final three-repetition sample. A focused test confirms cache
+invalidation after writes through a clone and a separately opened collection
+handle. Rung 3 is accepted.
