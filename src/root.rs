@@ -393,9 +393,36 @@ pub(crate) fn read_all_points(repo: &Repository, root: Oid) -> Result<BTreeMap<P
 }
 
 fn read_stored_points(repo: &Repository, root: Oid) -> Result<BTreeMap<PointId, StoredPoint>> {
+    let mut result = BTreeMap::new();
+    for (hash, point_tree) in point_tree_entries(repo, root)? {
+        let point = read_point_tree(repo, point_tree)?;
+        if id_hash(&point.id) != hash {
+            return Err(Error::Corrupt(format!(
+                "point ID hash does not match path for {}",
+                point.id
+            )));
+        }
+        let id = point.id.clone();
+        if result
+            .insert(
+                id,
+                StoredPoint {
+                    point,
+                    tree: point_tree,
+                },
+            )
+            .is_some()
+        {
+            return Err(Error::Corrupt("duplicate typed point ID".into()));
+        }
+    }
+    Ok(result)
+}
+
+fn point_tree_entries(repo: &Repository, root: Oid) -> Result<Vec<(String, Oid)>> {
     let points_oid = root_entry_oid(repo, root, "points")?;
     let points_tree = repo.find_tree(points_oid)?;
-    let mut result = BTreeMap::new();
+    let mut result = Vec::new();
     for prefix_entry in &points_tree {
         ensure_tree_entry(&prefix_entry, "point hash prefix")?;
         let prefix = prefix_entry.name().unwrap_or_default();
@@ -408,26 +435,7 @@ fn read_stored_points(repo: &Repository, root: Oid) -> Result<BTreeMap<PointId, 
                     "invalid point hash path {prefix}/{hash}"
                 )));
             }
-            let point = read_point_tree(repo, point_entry.id())?;
-            if id_hash(&point.id) != hash {
-                return Err(Error::Corrupt(format!(
-                    "point ID hash does not match path for {}",
-                    point.id
-                )));
-            }
-            let id = point.id.clone();
-            if result
-                .insert(
-                    id,
-                    StoredPoint {
-                        point,
-                        tree: point_entry.id(),
-                    },
-                )
-                .is_some()
-            {
-                return Err(Error::Corrupt("duplicate typed point ID".into()));
-            }
+            result.push((hash.to_owned(), point_entry.id()));
         }
     }
     Ok(result)
@@ -487,23 +495,31 @@ fn ensure_tree_entry(entry: &git2::TreeEntry<'_>, context: &str) -> Result<()> {
 }
 
 fn exact_query(repo: &Repository, root: Oid, meta: &RootMeta, query: Query) -> Result<QueryResult> {
-    let points = read_all_points(repo, root)?;
+    let needs_payload = query.filter.is_some() || query.with_payload;
     let mut scored = Vec::new();
     let mut vectors_scored = 0;
-    for point in points.values() {
-        if query
-            .filter
-            .as_ref()
-            .is_some_and(|filter| !matches_filter(filter, &point.id, &point.payload))
-        {
+    for (hash, point_tree) in point_tree_entries(repo, root)? {
+        let (id, vector, payload) = read_point_parts(repo, point_tree, needs_payload)?;
+        if id_hash(&id) != hash {
+            return Err(Error::Corrupt(format!(
+                "point ID hash does not match path for {id}"
+            )));
+        }
+        if query.filter.as_ref().is_some_and(|filter| {
+            !matches_filter(
+                filter,
+                &id,
+                payload.as_ref().expect("payload requested for filter"),
+            )
+        }) {
             continue;
         }
         vectors_scored += 1;
         scored.push(ScoredPoint {
-            id: point.id.clone(),
-            score: cosine(&query.vector, &point.vector),
-            payload: query.with_payload.then_some(point.payload.clone()),
-            vector: query.with_vector.then_some(point.vector.clone()),
+            id,
+            score: cosine(&query.vector, &vector),
+            payload: query.with_payload.then(|| payload.unwrap_or_default()),
+            vector: query.with_vector.then_some(vector),
         });
     }
     sort_and_truncate(&mut scored, query.limit);
