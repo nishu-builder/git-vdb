@@ -263,6 +263,26 @@ def summarize(case: dict, points, queries, git_reports, lance_reports, steps):
             "filtered": {},
             "mutations": {},
         }
+        if engine == "git-vdb":
+            adapters = [report["named_adapter"] for report in reports]
+            engine_summary["named_adapter"] = {
+                "build": percentiles([adapter["build_us"] for adapter in adapters]),
+                "exact_query": percentiles(
+                    sum((adapter["exact_query_us"] for adapter in adapters), [])
+                ),
+                "approximate_query": percentiles(
+                    sum((adapter["approximate_query_us"] for adapter in adapters), [])
+                ),
+                "historical_read": percentiles(
+                    [adapter["historical_read_us"] for adapter in adapters]
+                ),
+                "exact_correctness": assess_results(
+                    points, queries, adapters[0]["exact_results"], steps["k"]
+                ),
+                "approximate": recall(
+                    points, queries, adapters[0]["approximate_results"], steps["k"]
+                ),
+            }
         for selectivity in steps["filter_selectivities"]:
             filtered = (
                 reports[0]["snapshot_core"]["filtered"][number_key(selectivity)]

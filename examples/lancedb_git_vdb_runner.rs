@@ -118,6 +118,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if adapter_root != snapshot.root() {
         return Err("snapshot-core and named-adapter roots differ".into());
     }
+    query_collection_all(&collection, &queries[..1], maximum_k, true, None)?;
+    query_collection_all(&collection, &queries[..1], maximum_k, false, None)?;
+    let (adapter_exact_query_us, adapter_exact_results, adapter_exact_vectors_scored) =
+        query_collection_all(&collection, &queries, maximum_k, true, None)?;
+    let (
+        adapter_approximate_query_us,
+        adapter_approximate_results,
+        adapter_approximate_vectors_scored,
+    ) = query_collection_all(&collection, &queries, maximum_k, false, None)?;
     let historical_started = Instant::now();
     let historical = collection.at(&adapter_root)?;
     let historical_count = historical.count(None)?.count;
@@ -148,6 +157,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "named_adapter": {
             "setup_us": adapter_setup_us,
             "build_us": adapter_build_us,
+            "exact_query_us": adapter_exact_query_us,
+            "approximate_query_us": adapter_approximate_query_us,
+            "exact_results": adapter_exact_results,
+            "approximate_results": adapter_approximate_results,
+            "exact_vectors_scored": adapter_exact_vectors_scored,
+            "approximate_vectors_scored": adapter_approximate_vectors_scored,
             "historical_read_us": historical_read_us,
             "historical_count": historical_count,
             "on_disk_bytes": directory_bytes(adapter_dir.path())?,
@@ -216,6 +231,41 @@ fn query_all(
     for vector in queries {
         let started = Instant::now();
         let result = snapshot.query(Query {
+            vector: vector.clone(),
+            limit,
+            filter: filter.clone(),
+            params: QueryParams {
+                exact: Some(exact),
+                ..QueryParams::default()
+            },
+            ..Query::default()
+        })?;
+        durations.push(micros(started));
+        vectors_scored.push(result.stats.vectors_scored);
+        results.push(Value::Array(
+            result
+                .points
+                .into_iter()
+                .map(|point| json!({"id": point.id, "score": point.score}))
+                .collect(),
+        ));
+    }
+    Ok((durations, results, vectors_scored))
+}
+
+fn query_collection_all(
+    collection: &git_vdb::Collection,
+    queries: &[Vec<f32>],
+    limit: usize,
+    exact: bool,
+    filter: Option<Filter>,
+) -> git_vdb::Result<QueryBatch> {
+    let mut durations = Vec::with_capacity(queries.len());
+    let mut results = Vec::with_capacity(queries.len());
+    let mut vectors_scored = Vec::with_capacity(queries.len());
+    for vector in queries {
+        let started = Instant::now();
+        let result = collection.query(Query {
             vector: vector.clone(),
             limit,
             filter: filter.clone(),
