@@ -3,48 +3,98 @@
 [![CI](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-`git-vdb` is an embedded vector database whose immutable snapshots are ordinary
-Git trees. Its ref-free snapshot engine builds, mutates, and queries portable
-roots. An optional named-collection adapter adds commits, history, optimistic
-updates, and `refs/git-vdb/collections/*`. It has no server, daemon, network
-access, model inference, or telemetry.
+**A vector database whose state is an immutable, deterministic Git tree.**
 
-The root is deterministic: the same configuration and point set produce the
-same object ID regardless of input order, history, path, or bare versus non-bare
-repository layout. Snapshot operations create no commit or ref and do not read
-the clock. Named collection mutations commit that root and compare-and-swap the
-collection ref.
+`git-vdb` treats a vector database snapshot as a value, not as a location or a
+running service. A collection configuration and set of points produce one
+canonical root tree. The same logical state produces the same root object ID,
+independent of insertion order, repository path, commit history, timestamps, or
+machine.
 
-The project is early-stage and welcomes focused feedback and contributions.
-See [Contributing](CONTRIBUTING.md) and [Security](SECURITY.md).
+Git commits and refs are deliberately outside that identity. They are an
+optional convenience layer for naming snapshots, recording history, coordinating
+writers, and using normal fetch/push workflows.
 
-## Install
+```text
+deterministic snapshot engine
+    config + points  -> root tree
+    root + mutations -> new root tree
+    root + query     -> scored points
 
-Build the latest revision from source:
-
-```sh
-cargo install --git https://github.com/nishu-builder/git-vdb.git --locked
-git-vdb --help
+optional named-collection adapter
+    root tree -> commit -> refs/git-vdb/collections/<name>
 ```
 
-For reproducible production use, pin a commit or release tag rather than
-installing a moving branch. Prebuilt binaries and a crates.io package are not
-published yet.
+This distinction is the project’s central design choice: **the tree is the
+database; the commit is history about the database.**
 
-## Install and develop
+## Semantics
 
-Requires stable Rust, libgit2's build prerequisites, and Git for the transport
-integration tests.
+| Operation | Inputs | Result | Mutable side effects |
+|---|---|---|---|
+| `build` | configuration, points | deterministic root | writes immutable Git objects only |
+| `apply` | previous root, mutations | deterministic new root | writes immutable Git objects only |
+| `query` | root, vector, filter | scored points | none |
+| named collection write | collection name, mutations | root and commit | atomically advances one collection ref |
+
+The snapshot operations do not require a collection name, commit, ref, clock,
+or repository history. Previous roots remain valid after `apply`. Reads never
+change objects or refs.
+
+Roots can be stored in a bare or non-bare Git object database, or materialized
+as ordinary files and reopened without a surrounding repository. This makes a
+root suitable as a cache key, worker result, reproducible build artifact, or
+portable application value.
+
+## Which layer should I use?
+
+Use `SnapshotEngine` when the caller already owns naming, caching, scheduling,
+or persistence. It exposes the ref-free `build` / `apply` / `query` boundary and
+can use an ephemeral object database.
+
+Use `Database` and `Collection`, or the CLI, when you want familiar mutable
+collection names. This adapter adds parented commits, history, optimistic
+expected-root checks, atomic ref updates, and Git transport. It delegates tree
+construction to the same snapshot engine, so equivalent states have identical
+roots in both layers.
+
+## Quick start
+
+Build the CLI and create a three-dimensional collection:
 
 ```sh
 cargo build --release
-cargo test --all-targets --all-features
-cargo fmt --all --check
-cargo clippy --all-targets --all-features -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
+VDB=./target/release/git-vdb
+
+$VDB init ./demo-vectors.git --bare
+$VDB --repo ./demo-vectors.git collection create products --dimension 3
 ```
 
-## Immutable snapshot API
+Insert some points as JSON Lines:
+
+```sh
+cat > points.jsonl <<'EOF'
+{"id":"red","vector":[1.0,0.0,0.0],"payload":{"label":"Red product"}}
+{"id":"orange","vector":[0.9,0.1,0.0],"payload":{"label":"Orange product"}}
+{"id":"yellow","vector":[0.7,0.3,0.0],"payload":{"label":"Yellow product"}}
+{"id":"green","vector":[0.0,1.0,0.0],"payload":{"label":"Green product"}}
+EOF
+
+$VDB --repo ./demo-vectors.git upsert products --input points.jsonl
+```
+
+Return the three nearest points by cosine similarity:
+
+```sh
+printf '%s\n' '[1.0,0.0,0.0]' > query.json
+
+$VDB --repo ./demo-vectors.git query products \
+  --vector query.json --limit 3 --exact --with-payload
+```
+
+stdout is one compact JSON value; diagnostics go to stderr.
+
+## Immutable Rust API
 
 ```rust
 use git_vdb::{CollectionConfig, Point, Query, Snapshot, SnapshotEngine,
@@ -52,164 +102,119 @@ use git_vdb::{CollectionConfig, Point, Query, Snapshot, SnapshotEngine,
 
 # fn main() -> git_vdb::Result<()> {
 let engine = SnapshotEngine::ephemeral()?;
-let root = engine.build(
+let first = engine.build(
     CollectionConfig {
         dimension: 2,
         ..CollectionConfig::default()
     },
     vec![Point {
-        id: "note-1".into(),
-        vector: vec![0.1, 0.2],
+        id: "one".into(),
+        vector: vec![1.0, 0.0],
         payload: Default::default(),
     }],
 )?;
 
 let next = engine.apply(
-    root.root(),
+    first.root(),
     vec![SnapshotMutation::upsert(Point {
-        id: "note-2".into(),
-        vector: vec![0.2, 0.3],
+        id: "two".into(),
+        vector: vec![0.8, 0.2],
         payload: Default::default(),
     })],
 )?;
-let matches = engine.query(
+
+let result = engine.query(
     next.root(),
-    Query { vector: vec![0.2, 0.3], ..Query::default() },
-)?;
-
-next.materialize("./snapshot")?;
-let portable = Snapshot::open_directory("./snapshot")?;
-assert_eq!(portable.root(), next.root());
-assert_eq!(matches.root, next.root());
-# Ok(())
-# }
-```
-
-`build`, `apply`, and `query` accept no collection name, commit, ref, clock, or
-history. Roots can live in a caller-managed Git object database or be exported
-as ordinary files and reopened independently. See
-[Immutable snapshots](docs/snapshots.md) for lifecycle and retention details.
-
-## Named collections API
-
-```rust
-use git_vdb::{CollectionConfig, Condition, Database, Distance, Filter, Point,
-              Query};
-use serde_json::json;
-
-# fn main() -> git_vdb::Result<()> {
-let db = Database::init("./vectors.git")?;
-db.create_collection(
-    "notes",
-    CollectionConfig {
-        dimension: 2,
-        distance: Distance::Cosine,
-        vector_space: Some("example/embedding-v1".into()),
-        ..CollectionConfig::default()
+    Query {
+        vector: vec![1.0, 0.0],
+        limit: 2,
+        ..Query::default()
     },
 )?;
 
-let collection = db.collection("notes")?;
-collection.upsert(vec![Point {
-    id: "note-1".into(),
-    vector: vec![0.1, 0.2],
-    payload: json!({"topic": "rust", "year": 2026})
-        .as_object().unwrap().clone(),
-}])?;
-
-let result = collection.query(Query {
-    vector: vec![0.1, 0.2],
-    filter: Some(Filter::must([
-        Condition::matches("topic", "rust"),
-    ])),
-    with_payload: true,
-    ..Query::default()
-})?;
-println!("{} {}", result.root, result.points[0].score);
+next.materialize("./snapshot")?;
+let reopened = Snapshot::open_directory("./snapshot")?;
+assert_eq!(reopened.root(), next.root());
+assert_eq!(result.root, next.root());
 # Ok(())
 # }
 ```
 
-Mutation methods return `WriteResult { root, affected_points }`. Read results
-always include the resolved root. `Collection::at(root_or_commit)` returns a
-read-only historical view. `upsert_expect` and `delete_expect` add optimistic
-writer protection; atomic ref matching still protects ordinary mutations from
-concurrent lost updates.
+`SnapshotEngine::open` uses an existing Git object database;
+`SnapshotEngine::init` creates a bare one; `SnapshotEngine::ephemeral` manages a
+temporary one for the lifetime of its snapshots. Exact-root APIs accept only a
+full tree object ID. They intentionally do not resolve commits or symbolic refs.
+
+## Data and query semantics
+
+A point has a typed string or unsigned-integer ID, one dense `f32` vector, and a
+JSON object payload. String `"42"` and integer `42` are distinct IDs.
+
+Format version 1 uses cosine similarity. Exact search is the correctness oracle
+and can be forced with `--exact`. Above the root’s configured full-scan
+threshold, queries default to deterministic random-hyperplane LSH. Approximate
+queries expose explicit probe and unique-candidate limits and report how much
+work they performed.
 
 Filters support scalar `match`, numeric `range`, `has_id`, nested groups, and
-`must`/`should`/`must_not`. Dot-separated paths such as `author.team` traverse
-nested JSON objects. Literal dots in keys are not escaped in format version 1.
+`must` / `should` / `must_not`. Dot-separated field paths traverse nested JSON
+objects.
 
-## CLI
+The current mutation implementation reconstructs the logical root from the
+authoritative point set. Git reuses identical blobs and subtrees, but write CPU
+cost is not yet proportional to the number of changed points.
 
-The global `--repo` flag takes precedence over `GIT_VDB_REPO`; otherwise the
-current directory is used. stdout is one compact JSON value. Diagnostics go to
-stderr.
+## Canonical format and portability
+
+The root contains canonical metadata, authoritative point trees, and a
+deterministic LSH index:
+
+```text
+meta.json
+points/<id-hash-prefix>/<id-hash>/
+index/lsh-v1/<table>/<signature>/<id-hash>
+```
+
+JSON bytes, typed IDs, vector bytes, tree modes, projection generation, bucket
+paths, probe order, scoring, and tie ordering are versioned. See
+[docs/format.md](docs/format.md) for the normative format and
+[docs/snapshots.md](docs/snapshots.md) for snapshot lifecycle and directory
+materialization.
+
+Materializing a root writes its exact tree as ordinary files with no `.git`
+directory. Reimporting those files computes the same root ID. A filesystem
+export expands Git’s structural sharing, so use an object database when compact
+deduplication matters.
+
+Ref-free roots are not automatically reachable from Git refs. If you keep them
+in a long-lived object database, retain the root IDs externally and ensure Git
+garbage collection does not prune them. The named-collection adapter handles
+reachability by committing each root.
+
+## Scope
+
+`git-vdb` is embedded and offline. It has no server, daemon, network calls,
+embedding model, authentication layer, or telemetry. Git transport is available
+through ordinary Git tooling when the named-collection adapter is used.
+
+Version 1 currently has one dense vector per point, cosine similarity only, no
+payload index, and no sparse or hybrid search. The deterministic LSH defaults
+are a starting point rather than a claim of production tuning; current benchmark
+findings are recorded in [docs/findings.md](docs/findings.md).
+
+## Install and contribute
+
+Install the latest revision from source:
 
 ```sh
-git-vdb init ./vectors.git --bare
-git-vdb --repo ./vectors.git collection create notes \
-  --dimension 2 --distance cosine --vector-space example/embedding-v1
-
-git-vdb --repo ./vectors.git upsert notes --input points.jsonl
-git-vdb --repo ./vectors.git get notes --ids '"note-1"' --with-payload
-git-vdb --repo ./vectors.git count notes --filter filter.json
-git-vdb --repo ./vectors.git query notes --vector query.json --limit 10 \
-  --with-payload
-git-vdb --repo ./vectors.git history notes --limit 20
-git-vdb --repo ./vectors.git validate notes --full
+cargo install --git https://github.com/nishu-builder/git-vdb.git --locked
 ```
 
-Point input is JSON Lines:
+Pin a commit or release tag for reproducible production use. Prebuilt binaries
+and a crates.io package are not published yet.
 
-```json
-{"id":"note-1","vector":[0.1,0.2],"payload":{"topic":"rust"}}
-{"id":42,"vector":[0.3,0.4],"payload":{}}
-```
-
-CLI IDs are parsed as JSON when possible: `42` is an unsigned integer ID and
-`"42"` is a string ID. An unquoted non-JSON token is treated as a string.
-`query.json` may be a vector array or an object with a `vector` member.
-
-Approximate mode can be forced with `--approximate` and bounded with `--probes`
-and `--candidate-limit`; `--exact` forces the brute-force oracle. If neither is
-given, the versioned full-scan threshold stored in the root chooses the mode.
-Every query reports mode, buckets, candidates, vectors scored, and exhaustion.
-
-## Storage and operational behavior
-
-See [docs/format.md](docs/format.md) for the canonical tree, byte codecs, LSH
-projection and probe order, and compatibility rules. See
-[docs/snapshots.md](docs/snapshots.md) for the immutable-engine boundary and
-portable directory snapshots. See
-[docs/findings.md](docs/findings.md) for current performance status and the
-reproducible benchmark harness.
-
-Git objects written before a failed ref update are unreachable and harmless.
-Readers never update objects or refs. Deleting a collection deletes only its
-named ref; normal Git reachability and garbage collection govern later object
-retention. Repositories can be inspected, fetched, packed, and maintained with
-stock Git.
-
-## Current limits
-
-Version 1 has one dense vector per point, cosine similarity only, no payload
-index, and no sparse/hybrid search. Mutations reconstruct the logical tree from
-the authoritative point set; Git still reuses identical blobs and subtrees, but
-large write CPU cost is not yet proportional to the changed-point count. The
-LSH defaults are deterministic rather than claimed production-tuned; the
-100,000-point recall target has not yet been demonstrated. These limits are
-recorded rather than hidden in canonical behavior.
-
-## Community and project policy
-
-Bug reports and scoped proposals belong in
-[GitHub Issues](https://github.com/nishu-builder/git-vdb/issues). Use private
-vulnerability reporting for security issues. Pull requests are expected to
-preserve the deterministic-root, immutable-history, atomic-ref, lazy-read, and
-exact-oracle invariants described in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-CI runs formatting, Clippy, documentation, and the test suite across Linux,
-macOS, and Windows.
+Development setup, invariants, and validation commands are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as
+described in [SECURITY.md](SECURITY.md).
 
 Licensed under the [Apache License 2.0](LICENSE).
