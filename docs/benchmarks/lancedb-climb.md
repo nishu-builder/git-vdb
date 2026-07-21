@@ -138,3 +138,34 @@ snapshot-core approximate p50, snapshot build p50, and named build p50 all
 improved in the final three-repetition sample. A focused test confirms cache
 invalidation after writes through a clone and a separately opened collection
 handle. Rung 3 is accepted.
+
+## Rung 4 hypothesis: reuse unchanged point trees during apply
+
+At the final Rung 3 baseline, 1% upsert/delete p50 is 1.009/0.902 seconds,
+10% is 1.305/1.113 seconds, and 100% upsert is 2.084 seconds. The weak scaling
+with changed fraction and the build profile's Git object checks show that apply
+rewrites point blobs/trees for all surviving points even though Git ultimately
+deduplicates their bytes.
+
+Hypothesis: retain the existing point-tree OID while reading the previous root
+and pass it through canonical root construction for IDs not upserted. Deletes
+need no new point tree; upserted IDs are always re-encoded and validated. Index
+and root trees are still rebuilt from the complete final set, preserving exact
+format-version-1 bytes and roots. Expected gain is largest for 1%/10% mutation,
+with no read/query or clean-build effect and no memory-lifetime tradeoff.
+
+### Result: accepted
+
+The whole-harness run at
+`target/lancedb-results/smoke-20260721T234013Z` was invalid for performance
+acceptance because unrelated clean-build time rose about 60%. Interleaved
+focused A/B runs used the same raw data and runner with only the selected
+mutation fraction enabled.
+
+For 1% mutations, all five pairs improved. Median candidate/baseline ratios
+were 0.522 for upsert (47.8% reduction) and 0.673 for delete (32.7%
+reduction). For 10% mutations, all three pairs improved; median ratios were
+0.900 for upsert (10.0% reduction) and 0.877 for delete (12.3% reduction).
+The existing incremental-versus-clean-rebuild test kept the exact root gate
+green, as did the full suite and Clippy. Clean build, reads, queries, and stored
+bytes do not use the new reuse input. Rung 4 is accepted.

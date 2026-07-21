@@ -58,9 +58,9 @@ impl RootMeta {
     }
 }
 #[derive(Clone, Debug)]
-struct StoredPoint {
-    point: Point,
-    tree: Oid,
+pub(crate) struct StoredPoint {
+    pub(crate) point: Point,
+    pub(crate) tree: Oid,
 }
 
 pub(crate) fn diff_roots(repo: &Repository, left: Oid, right: Oid) -> Result<DiffResult> {
@@ -296,13 +296,25 @@ pub(crate) fn build_root(
     config: &CollectionConfig,
     points: &BTreeMap<PointId, Point>,
 ) -> Result<Oid> {
+    build_root_reusing(repo, config, points, &BTreeMap::new())
+}
+
+pub(crate) fn build_root_reusing(
+    repo: &Repository,
+    config: &CollectionConfig,
+    points: &BTreeMap<PointId, Point>,
+    reusable_point_trees: &BTreeMap<PointId, Oid>,
+) -> Result<Oid> {
     let projections = lsh_projections(&config.index, config.dimension);
     let mut point_entries: BTreeMap<String, Vec<(String, Oid)>> = BTreeMap::new();
     let mut bucket_entries: BucketEntries = BTreeMap::new();
     for point in points.values() {
         validate_point(point, config)?;
         let hash = id_hash(&point.id);
-        let point_tree = write_point_tree(repo, point)?;
+        let point_tree = reusable_point_trees
+            .get(&point.id)
+            .copied()
+            .map_or_else(|| write_point_tree(repo, point), Ok)?;
         point_entries
             .entry(hash[..2].into())
             .or_default()
@@ -411,7 +423,10 @@ pub(crate) fn read_all_points(repo: &Repository, root: Oid) -> Result<BTreeMap<P
         .collect())
 }
 
-fn read_stored_points(repo: &Repository, root: Oid) -> Result<BTreeMap<PointId, StoredPoint>> {
+pub(crate) fn read_stored_points(
+    repo: &Repository,
+    root: Oid,
+) -> Result<BTreeMap<PointId, StoredPoint>> {
     let mut result = BTreeMap::new();
     for (hash, point_tree) in point_tree_entries(repo, root)? {
         let point = read_point_tree(repo, point_tree)?;

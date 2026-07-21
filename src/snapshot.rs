@@ -1,7 +1,7 @@
 use crate::filter::matches_filter;
 use crate::root::{
-    build_root, count_root, get_root, query_root_with_cache, read_all_points, read_meta,
-    validate_config, validate_point, validate_root,
+    build_root, build_root_reusing, count_root, get_root, query_root_with_cache, read_meta,
+    read_stored_points, validate_config, validate_point, validate_root,
 };
 use crate::{
     CollectionConfig, CountResult, Error, GetRequest, GetResult, ObjectId, Point, PointId, Query,
@@ -121,7 +121,13 @@ impl SnapshotEngine {
         let repo = self.repo()?;
         let previous_root = exact_root(&repo, previous_root.as_ref())?;
         let config = read_meta(&repo, previous_root)?.config();
-        let mut points = read_all_points(&repo, previous_root)?;
+        let stored_points = read_stored_points(&repo, previous_root)?;
+        let mut points = BTreeMap::new();
+        let mut reusable_point_trees = BTreeMap::new();
+        for (id, stored) in stored_points {
+            reusable_point_trees.insert(id.clone(), stored.tree);
+            points.insert(id, stored.point);
+        }
         let mut upsert_ids = BTreeSet::new();
 
         for mutation in mutations {
@@ -134,6 +140,7 @@ impl SnapshotEngine {
                             point.id
                         )));
                     }
+                    reusable_point_trees.remove(&point.id);
                     points.insert(point.id.clone(), point);
                 }
                 SnapshotMutation::DeleteIds { ids } => {
@@ -152,7 +159,7 @@ impl SnapshotEngine {
             }
         }
 
-        let root = build_root(&repo, &config, &points)?;
+        let root = build_root_reusing(&repo, &config, &points, &reusable_point_trees)?;
         Ok(self.snapshot(root, Some(points)))
     }
 
