@@ -13,10 +13,9 @@
 - [ ] `cargo fmt --all --check`
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] `cargo test --all-targets --all-features`
-- [ ] Documentation and changelog updated when needed
+- [ ] Documentation updated when needed
 - [ ] Deterministic-root and historical-read invariants considered
 
 ## Remaining work
 
 <!-- Note limitations or follow-ups. Say "None" when complete. -->
-

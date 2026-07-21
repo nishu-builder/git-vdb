@@ -1,7 +1,6 @@
 # git-vdb
 
 [![CI](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml)
-[![Supply chain](https://github.com/nishu-builder/git-vdb/actions/workflows/supply-chain.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/supply-chain.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 `git-vdb` is an embedded vector database whose immutable snapshots are ordinary
@@ -17,8 +16,7 @@ the clock. Named collection mutations commit that root and compare-and-swap the
 collection ref.
 
 The project is early-stage and welcomes focused feedback and contributions.
-See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md),
-[Code of Conduct](CODE_OF_CONDUCT.md), and [Changelog](CHANGELOG.md).
+See [Contributing](CONTRIBUTING.md) and [Security](SECURITY.md).
 
 ## Install
 
@@ -211,9 +209,7 @@ vulnerability reporting for security issues. Pull requests are expected to
 preserve the deterministic-root, immutable-history, atomic-ref, lazy-read, and
 exact-oracle invariants described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Dependencies and GitHub Actions are monitored by Dependabot. CI runs formatting,
-Clippy, documentation, and the test suite across Linux, macOS, and Windows;
-cargo-deny checks advisories, licenses, duplicate versions, and dependency
-sources.
+CI runs formatting, Clippy, documentation, and the test suite across Linux,
+macOS, and Windows.
 
 Licensed under the [Apache License 2.0](LICENSE).

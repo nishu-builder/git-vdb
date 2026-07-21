@@ -3,7 +3,6 @@
 Thank you for helping improve `git-vdb`. Contributions of code, tests,
 documentation, benchmarks, bug reports, and design feedback are welcome.
 
-By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 Security vulnerabilities must be reported privately as described in
 [SECURITY.md](SECURITY.md), not through a public issue.
 
@@ -37,11 +36,9 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
-cargo deny check
 ```
 
-CI runs the Rust checks on Linux, macOS, and Windows. `cargo deny` is optional
-locally if it is not installed; its GitHub check is required before merge.
+CI runs the Rust checks on Linux, macOS, and Windows.
 
 ## Tests and determinism
 
@@ -86,8 +83,8 @@ Keep each pull request focused. In its description, explain:
 - the tests and benchmarks run;
 - remaining limitations or follow-up work.
 
-Update `CHANGELOG.md` under `Unreleased` for user-visible changes. Avoid
-drive-by dependency or formatting churn unrelated to the change.
+Update relevant documentation for user-visible changes. Avoid drive-by
+dependency or formatting churn unrelated to the change.
 
 Contributions are accepted under Apache License 2.0 section 5. No separate
 contributor license agreement is required.
