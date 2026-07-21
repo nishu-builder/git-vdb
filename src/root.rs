@@ -10,6 +10,7 @@ use git2::{ObjectType, Oid, Repository, Tree};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 const FORMAT_VERSION: u32 = 1;
 const TREE_MODE: i32 = 0o040000;
@@ -165,6 +166,15 @@ pub(crate) fn count_root(
 }
 
 pub(crate) fn query_root(repo: &Repository, root: Oid, query: Query) -> Result<QueryResult> {
+    query_root_with_cache(repo, root, query, None)
+}
+
+pub(crate) fn query_root_with_cache(
+    repo: &Repository,
+    root: Oid,
+    query: Query,
+    cached_points: Option<&OnceLock<BTreeMap<PointId, Point>>>,
+) -> Result<QueryResult> {
     let meta = read_meta(repo, root)?;
     validate_query(&query, &meta)?;
     let exact = query
@@ -172,7 +182,20 @@ pub(crate) fn query_root(repo: &Repository, root: Oid, query: Query) -> Result<Q
         .exact
         .unwrap_or(meta.point_count <= meta.index.full_scan_threshold);
     if exact {
-        exact_query(repo, root, &meta, query)
+        if let Some(cache) = cached_points {
+            if cache.get().is_none() {
+                let points = read_all_points(repo, root)?;
+                let _ = cache.set(points);
+            }
+            exact_query_points(
+                root,
+                &meta,
+                query,
+                cache.get().expect("snapshot point cache was initialized"),
+            )
+        } else {
+            exact_query(repo, root, &meta, query)
+        }
     } else {
         approximate_query(repo, root, &meta, query)
     }
@@ -520,6 +543,46 @@ fn exact_query(repo: &Repository, root: Oid, meta: &RootMeta, query: Query) -> R
             score: cosine(&query.vector, &vector),
             payload: query.with_payload.then(|| payload.unwrap_or_default()),
             vector: query.with_vector.then_some(vector),
+        });
+    }
+    sort_and_truncate(&mut scored, query.limit);
+    Ok(QueryResult {
+        root: root.into(),
+        points: scored,
+        stats: QueryStats {
+            mode: QueryMode::Exact,
+            collection_points: meta.point_count,
+            buckets_probed: 0,
+            candidates_discovered: meta.point_count,
+            vectors_scored,
+            probe_limit_exhausted: false,
+            candidate_limit_exhausted: false,
+        },
+    })
+}
+
+fn exact_query_points(
+    root: Oid,
+    meta: &RootMeta,
+    query: Query,
+    points: &BTreeMap<PointId, Point>,
+) -> Result<QueryResult> {
+    let mut scored = Vec::new();
+    let mut vectors_scored = 0;
+    for point in points.values() {
+        if query
+            .filter
+            .as_ref()
+            .is_some_and(|filter| !matches_filter(filter, &point.id, &point.payload))
+        {
+            continue;
+        }
+        vectors_scored += 1;
+        scored.push(ScoredPoint {
+            id: point.id.clone(),
+            score: cosine(&query.vector, &point.vector),
+            payload: query.with_payload.then(|| point.payload.clone()),
+            vector: query.with_vector.then(|| point.vector.clone()),
         });
     }
     sort_and_truncate(&mut scored, query.limit);

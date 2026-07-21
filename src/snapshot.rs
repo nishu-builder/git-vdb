@@ -1,7 +1,7 @@
 use crate::filter::matches_filter;
 use crate::root::{
-    build_root, count_root, get_root, query_root, read_all_points, read_meta, validate_config,
-    validate_point, validate_root,
+    build_root, count_root, get_root, query_root_with_cache, read_all_points, read_meta,
+    validate_config, validate_point, validate_root,
 };
 use crate::{
     CollectionConfig, CountResult, Error, GetRequest, GetResult, ObjectId, Point, PointId, Query,
@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tempfile::TempDir;
 
 const TREE_MODE: i32 = 0o040000;
@@ -35,6 +35,7 @@ pub struct SnapshotEngine {
 pub struct Snapshot {
     object_database: PathBuf,
     root: Oid,
+    points: Arc<OnceLock<BTreeMap<PointId, Point>>>,
     temporary: Option<Arc<TempDir>>,
 }
 
@@ -100,7 +101,7 @@ impl SnapshotEngine {
         let points = canonical_point_set(points, &config)?;
         let repo = self.repo()?;
         let root = build_root(&repo, &config, &points)?;
-        Ok(self.snapshot(root))
+        Ok(self.snapshot(root, Some(points)))
     }
 
     /// Applies an ordered mutation batch to a root and returns the new root.
@@ -152,7 +153,7 @@ impl SnapshotEngine {
         }
 
         let root = build_root(&repo, &config, &points)?;
-        Ok(self.snapshot(root))
+        Ok(self.snapshot(root, Some(points)))
     }
 
     /// Opens an exact tree object ID without resolving refs or commits.
@@ -160,7 +161,7 @@ impl SnapshotEngine {
         let repo = self.repo()?;
         let root = exact_root(&repo, root.as_ref())?;
         read_meta(&repo, root)?;
-        Ok(self.snapshot(root))
+        Ok(self.snapshot(root, None))
     }
 
     /// Imports a materialized canonical tree into this engine's object database.
@@ -175,7 +176,7 @@ impl SnapshotEngine {
         let repo = self.repo()?;
         let root = import_directory(&repo, path)?;
         read_meta(&repo, root)?;
-        Ok(self.snapshot(root))
+        Ok(self.snapshot(root, None))
     }
 
     /// Queries an exact root ID without first constructing a named collection.
@@ -215,10 +216,17 @@ impl SnapshotEngine {
         Snapshot::open_directory(path)
     }
 
-    fn snapshot(&self, root: Oid) -> Snapshot {
+    fn snapshot(&self, root: Oid, points: Option<BTreeMap<PointId, Point>>) -> Snapshot {
+        let cache = OnceLock::new();
+        if let Some(points) = points {
+            cache
+                .set(points)
+                .expect("new snapshot point cache must be empty");
+        }
         Snapshot {
             object_database: self.object_database.clone(),
             root,
+            points: Arc::new(cache),
             temporary: self.temporary.clone(),
         }
     }
@@ -262,7 +270,8 @@ impl Snapshot {
     }
 
     pub fn query(&self, query: Query) -> Result<QueryResult> {
-        query_root(&self.repo()?, self.root, query)
+        let repo = self.repo()?;
+        query_root_with_cache(&repo, self.root, query, Some(&self.points))
     }
 
     /// Applies mutations using this snapshot's object database without creating

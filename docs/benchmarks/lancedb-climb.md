@@ -69,3 +69,38 @@ Every pair improved. The median paired ratio was 0.751, a 24.9% reduction that
 exceeds both the 5% materiality threshold and observed candidate variance. No
 important metric is structurally affected outside exact query. Rung 1 is
 accepted.
+
+## Rung 2 hypothesis: retain immutable snapshot points
+
+Rung 1 leaves every exact query reopening and decoding two or three blobs per
+point. A `Snapshot` is immutable and already owns the lifetime of its object
+database, while LanceDB's warm process retains table state. Keeping a decoded
+point map with a snapshot should eliminate repeated object lookup on warm exact
+queries. Snapshots returned by build/apply can retain the canonical map already
+present during construction; snapshots opened by root can fill it after the
+first successful exact read. Clones can safely share it.
+
+Expected result: a large warm exact-query reduction with identical roots,
+scores, ordering, filters, and query statistics. Tradeoff: live snapshots retain
+roughly vector bytes plus IDs/payloads in memory. The named collection adapter,
+one-shot `SnapshotEngine::query`, approximate search, and cold opened-snapshot
+read remain uncached, keeping their costs separately visible.
+
+### Result: accepted
+
+Clustered raw results are in
+`target/lancedb-results/smoke-20260721T232448Z`; uniform raw results are in
+`target/lancedb-results/smoke-20260721T232709Z`. Exact IDs and scores still
+agree with the oracle at k=1/10/100 and all selectivities. Roots, disk bytes,
+approximate results, and named-adapter behavior are unchanged.
+
+| Distribution | Rung 1 exact p50 | Rung 2 exact p50 | Reduction |
+|---|---:|---:|---:|
+| Clustered | 124,439.5 us | 241.5 us | 99.81% |
+| Uniform | 73,475.0 us | 263.0 us | 99.64% |
+
+A paired full-run RSS check reported 28,426,240 bytes for Rung 1 and 28,049,408
+bytes for Rung 2. At this tier, the retained cache did not raise measured peak
+RSS because the runner already keeps the source vectors alive. The full
+clustered runner fell from 21.84 seconds to 14.75 seconds. The gain is far above
+noise with no measured material regression, so Rung 2 is accepted.
