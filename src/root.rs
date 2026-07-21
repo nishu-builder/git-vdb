@@ -1,14 +1,15 @@
+//! Canonical root-tree construction, reads, search, and validation.
+
 use crate::codec::{
     canonical_json, decode_id, decode_payload, decode_vector, encode_id, encode_vector, id_hash,
     validate_vector_components,
 };
 use crate::filter::matches_filter;
 use crate::*;
-use git2::{Commit, ObjectType, Oid, Repository, Signature, Tree};
+use git2::{ObjectType, Oid, Repository, Tree};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 
 const FORMAT_VERSION: u32 = 1;
 const TREE_MODE: i32 = 0o040000;
@@ -17,7 +18,7 @@ const BLOB_MODE: i32 = 0o100644;
 type BucketEntries = BTreeMap<usize, BTreeMap<String, BTreeMap<String, Vec<(String, Oid)>>>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct RootMeta {
+pub(crate) struct RootMeta {
     format_version: u32,
     point_count: usize,
     dimension: usize,
@@ -42,7 +43,7 @@ impl RootMeta {
         }
     }
 
-    fn config(&self) -> CollectionConfig {
+    pub(crate) fn config(&self) -> CollectionConfig {
         CollectionConfig {
             dimension: self.dimension,
             distance: self.distance,
@@ -50,485 +51,175 @@ impl RootMeta {
             index: self.index.clone(),
         }
     }
-}
 
-#[derive(Clone, Copy, Debug)]
-struct Snapshot {
-    root: Oid,
-    commit: Option<Oid>,
+    pub(crate) fn point_count(&self) -> usize {
+        self.point_count
+    }
 }
-
 #[derive(Clone, Debug)]
 struct StoredPoint {
     point: Point,
     tree: Oid,
 }
 
-#[derive(Clone, Debug)]
-pub struct Database {
-    path: PathBuf,
+pub(crate) fn diff_roots(repo: &Repository, left: Oid, right: Oid) -> Result<DiffResult> {
+    let left_points = read_stored_points(repo, left)?;
+    let right_points = read_stored_points(repo, right)?;
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut changed = Vec::new();
+    for (id, point) in &left_points {
+        match right_points.get(id) {
+            None => removed.push(id.clone()),
+            Some(right_point) if right_point.tree != point.tree => changed.push(id.clone()),
+            _ => {}
+        }
+    }
+    for id in right_points.keys() {
+        if !left_points.contains_key(id) {
+            added.push(id.clone());
+        }
+    }
+    let left_meta = read_meta(repo, left)?;
+    let right_meta = read_meta(repo, right)?;
+    let left_index = root_entry_oid(repo, left, "index")?;
+    let right_index = root_entry_oid(repo, right, "index")?;
+    let left_objects = object_sizes(repo, left)?;
+    let right_objects = object_sizes(repo, right)?;
+    let shared_ids: BTreeSet<_> = left_objects
+        .keys()
+        .filter(|id| right_objects.contains_key(id))
+        .copied()
+        .collect();
+    Ok(DiffResult {
+        left_root: left.into(),
+        right_root: right.into(),
+        added,
+        removed,
+        changed,
+        configuration_changed: left_meta.config() != right_meta.config(),
+        buckets_changed: left_index != right_index,
+        shared: stats_for(&left_objects, shared_ids.iter().copied()),
+        left_unique: stats_for(
+            &left_objects,
+            left_objects
+                .keys()
+                .filter(|id| !shared_ids.contains(id))
+                .copied(),
+        ),
+        right_unique: stats_for(
+            &right_objects,
+            right_objects
+                .keys()
+                .filter(|id| !shared_ids.contains(id))
+                .copied(),
+        ),
+    })
 }
 
-#[derive(Clone, Debug)]
-pub struct Collection {
-    db: Database,
-    name: String,
-    historical: Option<Snapshot>,
+pub(crate) fn get_root(repo: &Repository, root: Oid, request: GetRequest) -> Result<GetResult> {
+    let points = read_all_points(repo, root)?;
+    let selected_ids: BTreeSet<_> = request.ids.into_iter().collect();
+    let mut records = points
+        .into_values()
+        .filter(|point| {
+            (selected_ids.is_empty() || selected_ids.contains(&point.id))
+                && request
+                    .filter
+                    .as_ref()
+                    .is_none_or(|filter| matches_filter(filter, &point.id, &point.payload))
+        })
+        .skip(request.offset)
+        .take(request.limit.unwrap_or(usize::MAX))
+        .map(|point| Record {
+            id: point.id,
+            payload: request.with_payload.then_some(point.payload),
+            vector: request.with_vector.then_some(point.vector),
+        })
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(GetResult {
+        root: root.into(),
+        points: records,
+    })
 }
 
-impl Database {
-    pub fn init(path: impl AsRef<Path>) -> Result<Self> {
-        Self::init_with_options(path, false)
-    }
+pub(crate) fn count_root(
+    repo: &Repository,
+    root: Oid,
+    filter: Option<Filter>,
+) -> Result<CountResult> {
+    let meta = read_meta(repo, root)?;
+    let count = if let Some(filter) = filter {
+        read_all_points(repo, root)?
+            .values()
+            .filter(|point| matches_filter(&filter, &point.id, &point.payload))
+            .count()
+    } else {
+        meta.point_count
+    };
+    Ok(CountResult {
+        root: root.into(),
+        count,
+    })
+}
 
-    pub fn init_bare(path: impl AsRef<Path>) -> Result<Self> {
-        Self::init_with_options(path, true)
-    }
-
-    pub fn init_with_options(path: impl AsRef<Path>, bare: bool) -> Result<Self> {
-        let path = path.as_ref();
-        if bare {
-            Repository::init_bare(path)?;
-        } else {
-            Repository::init(path)?;
-        }
-        Self::open(path)
-    }
-
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let repository = Repository::open(path.as_ref())?;
-        Ok(Self {
-            path: repository.path().to_path_buf(),
-        })
-    }
-
-    fn repo(&self) -> Result<Repository> {
-        Ok(Repository::open(&self.path)?)
-    }
-
-    pub fn create_collection(
-        &self,
-        name: impl AsRef<str>,
-        config: CollectionConfig,
-    ) -> Result<Collection> {
-        let name = name.as_ref();
-        validate_collection_name(name)?;
-        validate_config(&config)?;
-        let repo = self.repo()?;
-        let ref_name = collection_ref(name);
-        if repo.find_reference(&ref_name).is_ok() {
-            return Err(Error::CollectionExists(name.into()));
-        }
-        let root = build_root(&repo, &config, &BTreeMap::new())?;
-        let commit = create_commit(&repo, root, None, &format!("create collection {name}"))?;
-        repo.reference(&ref_name, commit, false, "git-vdb create collection")?;
-        Ok(Collection {
-            db: self.clone(),
-            name: name.into(),
-            historical: None,
-        })
-    }
-
-    pub fn get_or_create_collection(
-        &self,
-        name: impl AsRef<str>,
-        config: CollectionConfig,
-    ) -> Result<Collection> {
-        match self.collection(name.as_ref()) {
-            Ok(collection) => {
-                let actual = collection.info()?.config;
-                if actual != config {
-                    return Err(Error::Invalid(format!(
-                        "collection exists with a different configuration: {actual:?}"
-                    )));
-                }
-                Ok(collection)
-            }
-            Err(Error::CollectionNotFound(_)) => self.create_collection(name, config),
-            Err(error) => Err(error),
-        }
-    }
-
-    pub fn collection(&self, name: impl AsRef<str>) -> Result<Collection> {
-        let name = name.as_ref();
-        validate_collection_name(name)?;
-        let repo = self.repo()?;
-        if repo.find_reference(&collection_ref(name)).is_err() {
-            return Err(Error::CollectionNotFound(name.into()));
-        }
-        Ok(Collection {
-            db: self.clone(),
-            name: name.into(),
-            historical: None,
-        })
-    }
-
-    pub fn list_collections(&self) -> Result<Vec<String>> {
-        let repo = self.repo()?;
-        let mut names = Vec::new();
-        for reference in repo.references_glob("refs/git-vdb/collections/*")? {
-            let reference = reference?;
-            if let Some(name) = reference.name()?.strip_prefix("refs/git-vdb/collections/") {
-                names.push(name.to_owned());
-            }
-        }
-        names.sort();
-        Ok(names)
-    }
-
-    pub fn delete_collection(&self, name: impl AsRef<str>) -> Result<ObjectId> {
-        let collection = self.collection(name.as_ref())?;
-        let root = collection.root()?;
-        let repo = self.repo()?;
-        repo.find_reference(&collection_ref(name.as_ref()))?
-            .delete()?;
-        Ok(root)
+pub(crate) fn query_root(repo: &Repository, root: Oid, query: Query) -> Result<QueryResult> {
+    let meta = read_meta(repo, root)?;
+    validate_query(&query, &meta)?;
+    let exact = query
+        .params
+        .exact
+        .unwrap_or(meta.point_count <= meta.index.full_scan_threshold);
+    if exact {
+        exact_query(repo, root, &meta, query)
+    } else {
+        approximate_query(repo, root, &meta, query)
     }
 }
 
-impl Collection {
-    fn repo(&self) -> Result<Repository> {
-        self.db.repo()
+pub(crate) fn validate_root(repo: &Repository, root: Oid, full: bool) -> Result<ValidationReport> {
+    let meta = read_meta(repo, root)?;
+    validate_config(&meta.config()).map_err(|error| Error::Corrupt(error.to_string()))?;
+    let points = read_stored_points(repo, root)?;
+    if points.len() != meta.point_count {
+        return Err(Error::Corrupt(format!(
+            "metadata point count {} does not match tree count {}",
+            meta.point_count,
+            points.len()
+        )));
     }
-
-    fn snapshot(&self, repo: &Repository) -> Result<Snapshot> {
-        if let Some(snapshot) = self.historical {
-            return Ok(snapshot);
-        }
-        current_snapshot(repo, &self.name)
-    }
-
-    pub fn root(&self) -> Result<ObjectId> {
-        let repo = self.repo()?;
-        Ok(self.snapshot(&repo)?.root.into())
-    }
-
-    pub fn at(&self, revision: impl AsRef<str>) -> Result<Self> {
-        let repo = self.repo()?;
-        let snapshot = resolve_snapshot(&repo, revision.as_ref())?;
-        read_meta(&repo, snapshot.root)?;
-        Ok(Self {
-            db: self.db.clone(),
-            name: self.name.clone(),
-            historical: Some(snapshot),
-        })
-    }
-
-    pub fn info(&self) -> Result<CollectionInfo> {
-        let repo = self.repo()?;
-        let snapshot = self.snapshot(&repo)?;
-        let meta = read_meta(&repo, snapshot.root)?;
-        Ok(CollectionInfo {
-            root: snapshot.root.into(),
-            name: self.name.clone(),
-            point_count: meta.point_count,
-            config: meta.config(),
-            read_only: self.historical.is_some(),
-        })
-    }
-
-    pub fn upsert(&self, points: Vec<Point>) -> Result<WriteResult> {
-        self.upsert_expect(points, None)
-    }
-
-    pub fn upsert_expect(
-        &self,
-        points: Vec<Point>,
-        expected_root: Option<ObjectId>,
-    ) -> Result<WriteResult> {
-        if self.historical.is_some() {
-            return Err(Error::ReadOnly);
-        }
-        if points.is_empty() {
-            return Err(Error::Invalid("upsert batch must not be empty".into()));
-        }
-        let repo = self.repo()?;
-        let snapshot = current_snapshot(&repo, &self.name)?;
-        check_expected_root(snapshot.root, expected_root.as_ref())?;
-        let meta = read_meta(&repo, snapshot.root)?;
-        let config = meta.config();
-        let mut existing = read_all_points(&repo, snapshot.root)?;
-        let mut batch_ids = BTreeSet::new();
-        for point in &points {
-            validate_point(point, &config)?;
-            if !batch_ids.insert(point.id.clone()) {
-                return Err(Error::Invalid(format!(
-                    "upsert batch contains duplicate point ID {}",
-                    point.id
-                )));
+    let mut checked_buckets = 0;
+    if full {
+        let projections = lsh_projections(&meta.index, meta.dimension);
+        let mut expected = BTreeSet::new();
+        for (id, stored) in &points {
+            validate_point(&stored.point, &meta.config())
+                .map_err(|error| Error::Corrupt(error.to_string()))?;
+            let hash = id_hash(id);
+            for (table, hyperplanes) in projections.iter().enumerate() {
+                let signature = lsh_signature_with(&stored.point.vector, hyperplanes);
+                expected.insert((table, signature, hash.clone(), stored.tree));
             }
         }
-        let affected_points = points.len();
-        for point in points {
-            existing.insert(point.id.clone(), point);
-        }
-        let root = build_root(&repo, &config, &existing)?;
-        advance_collection(
-            &repo,
-            &self.name,
-            snapshot,
-            root,
-            &format!("upsert {affected_points} points"),
-        )?;
-        Ok(WriteResult {
-            root: root.into(),
-            affected_points,
-        })
-    }
-
-    pub fn delete(&self, selector: DeleteSelector) -> Result<WriteResult> {
-        self.delete_expect(selector, None)
-    }
-
-    pub fn delete_expect(
-        &self,
-        selector: DeleteSelector,
-        expected_root: Option<ObjectId>,
-    ) -> Result<WriteResult> {
-        if self.historical.is_some() {
-            return Err(Error::ReadOnly);
-        }
-        if selector.ids.is_empty() && selector.filter.is_none() {
-            return Err(Error::Invalid("delete selector must not be empty".into()));
-        }
-        let repo = self.repo()?;
-        let snapshot = current_snapshot(&repo, &self.name)?;
-        check_expected_root(snapshot.root, expected_root.as_ref())?;
-        let config = read_meta(&repo, snapshot.root)?.config();
-        let mut existing = read_all_points(&repo, snapshot.root)?;
-        let ids: BTreeSet<_> = selector.ids.into_iter().collect();
-        let before = existing.len();
-        existing.retain(|id, point| {
-            let id_match = ids.contains(id);
-            let filter_match = selector
-                .filter
-                .as_ref()
-                .is_some_and(|filter| matches_filter(filter, id, &point.payload));
-            !(id_match || filter_match)
-        });
-        let affected_points = before - existing.len();
-        let root = build_root(&repo, &config, &existing)?;
-        advance_collection(
-            &repo,
-            &self.name,
-            snapshot,
-            root,
-            &format!("delete {affected_points} points"),
-        )?;
-        Ok(WriteResult {
-            root: root.into(),
-            affected_points,
-        })
-    }
-
-    pub fn get(&self, request: GetRequest) -> Result<GetResult> {
-        let repo = self.repo()?;
-        let snapshot = self.snapshot(&repo)?;
-        let points = read_all_points(&repo, snapshot.root)?;
-        let selected_ids: BTreeSet<_> = request.ids.into_iter().collect();
-        let mut records = points
-            .into_values()
-            .filter(|point| {
-                (selected_ids.is_empty() || selected_ids.contains(&point.id))
-                    && request
-                        .filter
-                        .as_ref()
-                        .is_none_or(|filter| matches_filter(filter, &point.id, &point.payload))
-            })
-            .skip(request.offset)
-            .take(request.limit.unwrap_or(usize::MAX))
-            .map(|point| Record {
-                id: point.id,
-                payload: request.with_payload.then_some(point.payload),
-                vector: request.with_vector.then_some(point.vector),
-            })
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| left.id.cmp(&right.id));
-        Ok(GetResult {
-            root: snapshot.root.into(),
-            points: records,
-        })
-    }
-
-    pub fn count(&self, filter: Option<Filter>) -> Result<CountResult> {
-        let repo = self.repo()?;
-        let snapshot = self.snapshot(&repo)?;
-        let meta = read_meta(&repo, snapshot.root)?;
-        let count = if let Some(filter) = filter {
-            read_all_points(&repo, snapshot.root)?
-                .values()
-                .filter(|point| matches_filter(&filter, &point.id, &point.payload))
-                .count()
-        } else {
-            meta.point_count
-        };
-        Ok(CountResult {
-            root: snapshot.root.into(),
-            count,
-        })
-    }
-
-    pub fn query(&self, query: Query) -> Result<QueryResult> {
-        let repo = self.repo()?;
-        let snapshot = self.snapshot(&repo)?;
-        let meta = read_meta(&repo, snapshot.root)?;
-        validate_query(&query, &meta)?;
-        let exact = query
-            .params
-            .exact
-            .unwrap_or(meta.point_count <= meta.index.full_scan_threshold);
-        if exact {
-            exact_query(&repo, snapshot.root, &meta, query)
-        } else {
-            approximate_query(&repo, snapshot.root, &meta, query)
+        let actual = read_bucket_entries(repo, root, &meta.index)?;
+        checked_buckets = actual.len();
+        if expected != actual {
+            return Err(Error::Corrupt(
+                "LSH bucket entries do not match authoritative points".into(),
+            ));
         }
     }
-
-    pub fn history(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
-        let repo = self.repo()?;
-        let mut commit_id = self
-            .snapshot(&repo)?
-            .commit
-            .ok_or_else(|| Error::Invalid("a root tree has no commit history".into()))?;
-        let mut history = Vec::new();
-        while history.len() < limit {
-            let commit = repo.find_commit(commit_id)?;
-            let parent = commit.parent_id(0).ok();
-            history.push(HistoryEntry {
-                commit: commit.id().into(),
-                root: commit.tree_id().into(),
-                parent: parent.map(Into::into),
-                message: commit.message().unwrap_or_default().to_owned(),
-                time_seconds: commit.time().seconds(),
-            });
-            let Some(parent) = parent else { break };
-            commit_id = parent;
-        }
-        Ok(history)
-    }
-
-    pub fn diff(
-        &self,
-        left_revision: impl AsRef<str>,
-        right_revision: impl AsRef<str>,
-    ) -> Result<DiffResult> {
-        let repo = self.repo()?;
-        let left = resolve_snapshot(&repo, left_revision.as_ref())?;
-        let right = resolve_snapshot(&repo, right_revision.as_ref())?;
-        let left_points = read_stored_points(&repo, left.root)?;
-        let right_points = read_stored_points(&repo, right.root)?;
-        let mut added = Vec::new();
-        let mut removed = Vec::new();
-        let mut changed = Vec::new();
-        for (id, point) in &left_points {
-            match right_points.get(id) {
-                None => removed.push(id.clone()),
-                Some(right_point) if right_point.tree != point.tree => changed.push(id.clone()),
-                _ => {}
-            }
-        }
-        for id in right_points.keys() {
-            if !left_points.contains_key(id) {
-                added.push(id.clone());
-            }
-        }
-        let left_meta = read_meta(&repo, left.root)?;
-        let right_meta = read_meta(&repo, right.root)?;
-        let left_index = root_entry_oid(&repo, left.root, "index")?;
-        let right_index = root_entry_oid(&repo, right.root, "index")?;
-        let left_objects = object_sizes(&repo, left.root)?;
-        let right_objects = object_sizes(&repo, right.root)?;
-        let shared_ids: BTreeSet<_> = left_objects
-            .keys()
-            .filter(|id| right_objects.contains_key(id))
-            .copied()
-            .collect();
-        Ok(DiffResult {
-            left_root: left.root.into(),
-            right_root: right.root.into(),
-            added,
-            removed,
-            changed,
-            configuration_changed: left_meta.config() != right_meta.config(),
-            buckets_changed: left_index != right_index,
-            shared: stats_for(&left_objects, shared_ids.iter().copied()),
-            left_unique: stats_for(
-                &left_objects,
-                left_objects
-                    .keys()
-                    .filter(|id| !shared_ids.contains(id))
-                    .copied(),
-            ),
-            right_unique: stats_for(
-                &right_objects,
-                right_objects
-                    .keys()
-                    .filter(|id| !shared_ids.contains(id))
-                    .copied(),
-            ),
-        })
-    }
-
-    pub fn validate(&self, full: bool) -> Result<ValidationReport> {
-        let repo = self.repo()?;
-        let snapshot = self.snapshot(&repo)?;
-        let meta = read_meta(&repo, snapshot.root)?;
-        validate_config(&meta.config()).map_err(|error| Error::Corrupt(error.to_string()))?;
-        let points = read_stored_points(&repo, snapshot.root)?;
-        if points.len() != meta.point_count {
-            return Err(Error::Corrupt(format!(
-                "metadata point count {} does not match tree count {}",
-                meta.point_count,
-                points.len()
-            )));
-        }
-        let mut checked_buckets = 0;
-        if full {
-            let projections = lsh_projections(&meta.index, meta.dimension);
-            let mut expected = BTreeSet::new();
-            for (id, stored) in &points {
-                validate_point(&stored.point, &meta.config())
-                    .map_err(|error| Error::Corrupt(error.to_string()))?;
-                let hash = id_hash(id);
-                for (table, hyperplanes) in projections.iter().enumerate() {
-                    let signature = lsh_signature_with(&stored.point.vector, hyperplanes);
-                    expected.insert((table, signature, hash.clone(), stored.tree));
-                }
-            }
-            let actual = read_bucket_entries(&repo, snapshot.root, &meta.index)?;
-            checked_buckets = actual.len();
-            if expected != actual {
-                return Err(Error::Corrupt(
-                    "LSH bucket entries do not match authoritative points".into(),
-                ));
-            }
-        }
-        Ok(ValidationReport {
-            root: snapshot.root.into(),
-            full,
-            point_count: points.len(),
-            checked_buckets,
-            valid: true,
-        })
-    }
+    Ok(ValidationReport {
+        root: root.into(),
+        full,
+        point_count: points.len(),
+        checked_buckets,
+        valid: true,
+    })
 }
 
-fn validate_collection_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > 128
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        || name.starts_with('.')
-        || name.ends_with('.')
-        || name.contains("..")
-    {
-        return Err(Error::Invalid(format!("invalid collection name {name:?}")));
-    }
-    Ok(())
-}
-
-fn validate_config(config: &CollectionConfig) -> Result<()> {
+pub(crate) fn validate_config(config: &CollectionConfig) -> Result<()> {
     if config.dimension == 0 || config.dimension > u32::MAX as usize {
         return Err(Error::Invalid(
             "dimension must be between 1 and u32::MAX".into(),
@@ -547,7 +238,7 @@ fn validate_config(config: &CollectionConfig) -> Result<()> {
     Ok(())
 }
 
-fn validate_point(point: &Point, config: &CollectionConfig) -> Result<()> {
+pub(crate) fn validate_point(point: &Point, config: &CollectionConfig) -> Result<()> {
     if point.vector.len() != config.dimension {
         return Err(Error::Invalid(format!(
             "point {} has dimension {}, expected {}",
@@ -581,105 +272,7 @@ fn validate_query(query: &Query, meta: &RootMeta) -> Result<()> {
     Ok(())
 }
 
-fn collection_ref(name: &str) -> String {
-    format!("refs/git-vdb/collections/{name}")
-}
-
-fn current_snapshot(repo: &Repository, name: &str) -> Result<Snapshot> {
-    let reference = repo
-        .find_reference(&collection_ref(name))
-        .map_err(|_| Error::CollectionNotFound(name.into()))?;
-    let commit = reference.peel_to_commit()?;
-    Ok(Snapshot {
-        root: commit.tree_id(),
-        commit: Some(commit.id()),
-    })
-}
-
-fn resolve_snapshot(repo: &Repository, revision: &str) -> Result<Snapshot> {
-    let object = repo.revparse_single(revision)?;
-    match object.kind() {
-        Some(ObjectType::Commit) => {
-            let commit = object.peel_to_commit()?;
-            Ok(Snapshot {
-                root: commit.tree_id(),
-                commit: Some(commit.id()),
-            })
-        }
-        Some(ObjectType::Tree) => Ok(Snapshot {
-            root: object.id(),
-            commit: None,
-        }),
-        _ => Err(Error::Invalid(format!(
-            "revision {revision:?} is not a commit or tree"
-        ))),
-    }
-}
-
-fn check_expected_root(actual: Oid, expected: Option<&ObjectId>) -> Result<()> {
-    if let Some(expected) = expected {
-        if expected.0 != actual.to_string() {
-            return Err(Error::StaleRoot {
-                expected: expected.clone(),
-                actual: actual.into(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn signature() -> Result<Signature<'static>> {
-    Ok(Signature::now("git-vdb", "git-vdb@localhost")?)
-}
-
-fn create_commit(
-    repo: &Repository,
-    root: Oid,
-    parent: Option<&Commit<'_>>,
-    message: &str,
-) -> Result<Oid> {
-    let tree = repo.find_tree(root)?;
-    let signature = signature()?;
-    let parents: Vec<&Commit<'_>> = parent.into_iter().collect();
-    Ok(repo.commit(None, &signature, &signature, message, &tree, &parents)?)
-}
-
-fn advance_collection(
-    repo: &Repository,
-    name: &str,
-    old: Snapshot,
-    root: Oid,
-    message: &str,
-) -> Result<()> {
-    let old_commit_id = old
-        .commit
-        .ok_or_else(|| Error::Corrupt("current collection ref is not a commit".into()))?;
-    let old_commit = repo.find_commit(old_commit_id)?;
-    let new_commit = create_commit(repo, root, Some(&old_commit), message)?;
-    repo.reference_matching(
-        &collection_ref(name),
-        new_commit,
-        true,
-        old_commit_id,
-        "git-vdb atomic collection update",
-    )
-    .map_err(|error| {
-        if error.code() == git2::ErrorCode::Modified {
-            let actual = current_snapshot(repo, name)
-                .map(|snapshot| snapshot.root.into())
-                .unwrap_or_else(|_| ObjectId("unknown".into()));
-            Error::StaleRoot {
-                expected: old.root.into(),
-                actual,
-            }
-        } else {
-            Error::Git(error)
-        }
-    })?;
-    Ok(())
-}
-
-fn build_root(
+pub(crate) fn build_root(
     repo: &Repository,
     config: &CollectionConfig,
     points: &BTreeMap<PointId, Point>,
@@ -768,7 +361,7 @@ fn write_lsh_tree(repo: &Repository, tables: BucketEntries) -> Result<Oid> {
     Ok(lsh.write()?)
 }
 
-fn read_meta(repo: &Repository, root: Oid) -> Result<RootMeta> {
+pub(crate) fn read_meta(repo: &Repository, root: Oid) -> Result<RootMeta> {
     let root_tree = repo.find_tree(root)?;
     if root_tree.get_name("points").is_none() || root_tree.get_name("index").is_none() {
         return Err(Error::Corrupt(
@@ -792,7 +385,7 @@ fn read_meta(repo: &Repository, root: Oid) -> Result<RootMeta> {
     Ok(meta)
 }
 
-fn read_all_points(repo: &Repository, root: Oid) -> Result<BTreeMap<PointId, Point>> {
+pub(crate) fn read_all_points(repo: &Repository, root: Oid) -> Result<BTreeMap<PointId, Point>> {
     Ok(read_stored_points(repo, root)?
         .into_iter()
         .map(|(id, stored)| (id, stored.point))
@@ -1275,6 +868,7 @@ fn stats_for(sizes: &BTreeMap<Oid, usize>, ids: impl IntoIterator<Item = Oid>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Collection, Database};
     use serde_json::json;
     use tempfile::TempDir;
 

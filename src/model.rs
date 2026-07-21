@@ -354,6 +354,37 @@ pub struct CollectionInfo {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SnapshotInfo {
+    pub root: ObjectId,
+    pub point_count: usize,
+    pub config: CollectionConfig,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum SnapshotMutation {
+    Upsert { point: Point },
+    DeleteIds { ids: Vec<PointId> },
+    DeleteFilter { filter: Filter },
+}
+
+impl SnapshotMutation {
+    pub fn upsert(point: Point) -> Self {
+        Self::Upsert { point }
+    }
+
+    pub fn delete_ids(ids: impl IntoIterator<Item = PointId>) -> Self {
+        Self::DeleteIds {
+            ids: ids.into_iter().collect(),
+        }
+    }
+
+    pub fn delete_filter(filter: Filter) -> Self {
+        Self::DeleteFilter { filter }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub commit: ObjectId,
     pub root: ObjectId,

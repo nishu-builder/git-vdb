@@ -50,6 +50,9 @@ must also demonstrate the relevant invariants:
 
 - roots do not depend on input order, repository path, history, or bare versus
   non-bare layout;
+- snapshot operations do not create commits or refs, resolve symbolic names, or
+  require repository history;
+- materializing and reopening a snapshot preserves its exact root object ID;
 - incremental writes equal clean rebuilds of the resulting point set;
 - exact search agrees with a simple cosine oracle and uses canonical tie order;
 - stale writers cannot replace a collection head;
@@ -88,4 +91,3 @@ drive-by dependency or formatting churn unrelated to the change.
 
 Contributions are accepted under Apache License 2.0 section 5. No separate
 contributor license agreement is required.
-

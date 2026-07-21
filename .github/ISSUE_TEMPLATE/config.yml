@@ -3,7 +3,3 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/nishu-builder/git-vdb/security/advisories/new
     about: Report vulnerabilities privately; do not create a public issue.
-  - name: Support guidance
-    url: https://github.com/nishu-builder/git-vdb/blob/main/SUPPORT.md
-    about: Read what information to include and where to ask for help.
-

@@ -4,22 +4,21 @@
 [![Supply chain](https://github.com/nishu-builder/git-vdb/actions/workflows/supply-chain.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/supply-chain.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-`git-vdb` is an embedded vector database whose immutable collection snapshots
-are ordinary Git trees. It exposes collections, typed point IDs, dense vectors,
-JSON payloads, upsert/get/delete/count, Qdrant-shaped filters, exact cosine
-search, deterministic random-hyperplane LSH, history, validation, and structural
-diffs. It has no server, daemon, network access, model inference, or telemetry.
+`git-vdb` is an embedded vector database whose immutable snapshots are ordinary
+Git trees. Its ref-free snapshot engine builds, mutates, and queries portable
+roots. An optional named-collection adapter adds commits, history, optimistic
+updates, and `refs/git-vdb/collections/*`. It has no server, daemon, network
+access, model inference, or telemetry.
 
-Every successful mutation writes an immutable root tree, creates a commit
-parented to the prior collection commit, and compare-and-swap updates
-`refs/git-vdb/collections/<name>`. The root, unlike the commit, is deterministic:
-the same configuration and point set produce the same object ID regardless of
-input order, history, path, or bare versus non-bare repository layout.
+The root is deterministic: the same configuration and point set produce the
+same object ID regardless of input order, history, path, or bare versus non-bare
+repository layout. Snapshot operations create no commit or ref and do not read
+the clock. Named collection mutations commit that root and compare-and-swap the
+collection ref.
 
 The project is early-stage and welcomes focused feedback and contributions.
 See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md),
-[Code of Conduct](CODE_OF_CONDUCT.md), [Support](SUPPORT.md),
-[Roadmap](ROADMAP.md), and [Changelog](CHANGELOG.md).
+[Code of Conduct](CODE_OF_CONDUCT.md), and [Changelog](CHANGELOG.md).
 
 ## Install
 
@@ -47,7 +46,53 @@ cargo clippy --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 ```
 
-## Rust API
+## Immutable snapshot API
+
+```rust
+use git_vdb::{CollectionConfig, Point, Query, Snapshot, SnapshotEngine,
+              SnapshotMutation};
+
+# fn main() -> git_vdb::Result<()> {
+let engine = SnapshotEngine::ephemeral()?;
+let root = engine.build(
+    CollectionConfig {
+        dimension: 2,
+        ..CollectionConfig::default()
+    },
+    vec![Point {
+        id: "note-1".into(),
+        vector: vec![0.1, 0.2],
+        payload: Default::default(),
+    }],
+)?;
+
+let next = engine.apply(
+    root.root(),
+    vec![SnapshotMutation::upsert(Point {
+        id: "note-2".into(),
+        vector: vec![0.2, 0.3],
+        payload: Default::default(),
+    })],
+)?;
+let matches = engine.query(
+    next.root(),
+    Query { vector: vec![0.2, 0.3], ..Query::default() },
+)?;
+
+next.materialize("./snapshot")?;
+let portable = Snapshot::open_directory("./snapshot")?;
+assert_eq!(portable.root(), next.root());
+assert_eq!(matches.root, next.root());
+# Ok(())
+# }
+```
+
+`build`, `apply`, and `query` accept no collection name, commit, ref, clock, or
+history. Roots can live in a caller-managed Git object database or be exported
+as ordinary files and reopened independently. See
+[Immutable snapshots](docs/snapshots.md) for lifecycle and retention details.
+
+## Named collections API
 
 ```rust
 use git_vdb::{CollectionConfig, Condition, Database, Distance, Filter, Point,
@@ -137,6 +182,8 @@ Every query reports mode, buckets, candidates, vectors scored, and exhaustion.
 
 See [docs/format.md](docs/format.md) for the canonical tree, byte codecs, LSH
 projection and probe order, and compatibility rules. See
+[docs/snapshots.md](docs/snapshots.md) for the immutable-engine boundary and
+portable directory snapshots. See
 [docs/findings.md](docs/findings.md) for current performance status and the
 reproducible benchmark harness.
 
@@ -159,11 +206,10 @@ recorded rather than hidden in canonical behavior.
 ## Community and project policy
 
 Bug reports and scoped proposals belong in
-[GitHub Issues](https://github.com/nishu-builder/git-vdb/issues). Please read
-[SUPPORT.md](SUPPORT.md) before posting and use private vulnerability reporting
-for security issues. Pull requests are expected to preserve the deterministic
-root, immutable-history, atomic-ref, lazy-read, and exact-oracle invariants
-described in [CONTRIBUTING.md](CONTRIBUTING.md).
+[GitHub Issues](https://github.com/nishu-builder/git-vdb/issues). Use private
+vulnerability reporting for security issues. Pull requests are expected to
+preserve the deterministic-root, immutable-history, atomic-ref, lazy-read, and
+exact-oracle invariants described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Dependencies and GitHub Actions are monitored by Dependabot. CI runs formatting,
 Clippy, documentation, and the test suite across Linux, macOS, and Windows;

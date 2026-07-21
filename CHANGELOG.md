@@ -9,12 +9,17 @@ public releases begin.
 
 ### Added
 
-- Open-source contribution, conduct, security, and support policies.
+- Ref-free `SnapshotEngine` build/apply/query APIs and immutable `Snapshot`
+  handles.
+- Exact-root export to and import from materialized directories.
+- Open-source contribution, conduct, and security policies.
 - Cross-platform CI, dependency review, supply-chain policy, and Dependabot.
 - GitHub issue and pull-request templates.
 
 ### Changed
 
+- Separated deterministic snapshot operations from the named Git commit/ref
+  adapter; collection writes now use the snapshot engine.
 - Upgraded `git2` to 0.21 to address RUSTSEC-2026-0183 and
   RUSTSEC-2026-0184.
 

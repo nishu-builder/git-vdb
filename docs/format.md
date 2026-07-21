@@ -98,7 +98,16 @@ accepted in bucket tree order until the unique candidate limit. Candidates are
 scored with exact cosine similarity and sorted by descending score, then typed
 canonical ID bytes ascending.
 
-## Refs and commits
+## Materialized snapshots
+
+A root can be written as an ordinary directory containing the exact tree above.
+Importing the directory uses regular files as mode `100644` blobs and directories
+as mode `040000` trees, so its computed tree ID is identical to the original
+root. The directory contains no `.git` metadata. Index paths materialize their
+referenced point trees as files, so filesystem exports do not preserve Git's
+object-level deduplication.
+
+## Named-collection adapter
 
 `refs/git-vdb/collections/<name>` points to a commit whose tree is the current
 root. A mutation creates a parented commit and advances the ref with libgit2's
@@ -107,4 +116,6 @@ trees are deterministic. Commit author, committer, timestamp, message, and
 object ID are deliberately not part of database identity.
 
 Readers accept either a commit or root tree object ID. A commit resolves to its
-tree. Format meaning is determined solely by the root metadata version.
+tree. The immutable snapshot API is stricter: it accepts only the full object ID
+of a tree and never resolves commits or refs. Format meaning is determined solely
+by the root metadata version.

@@ -1,10 +1,13 @@
+mod adapter;
 mod codec;
 mod filter;
 mod model;
-mod store;
+mod root;
+mod snapshot;
 
+pub use adapter::{Collection, Database};
 pub use model::*;
-pub use store::{Collection, Database};
+pub use snapshot::{Snapshot, SnapshotEngine};
 
 use thiserror::Error;
 
@@ -14,6 +17,8 @@ pub enum Error {
     Git(#[from] git2::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("invalid request: {0}")]
     Invalid(String),
     #[error("collection not found: {0}")]
