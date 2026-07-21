@@ -3,17 +3,37 @@
 [![CI](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**A vector database whose state is an immutable, deterministic Git tree.**
+**A vector database stored in a Git repository.**
 
-`git-vdb` treats a vector database snapshot as a value, not as a location or a
-running service. A collection configuration and set of points produce one
-canonical root tree. The same logical state produces the same root object ID,
-independent of insertion order, repository path, commit history, timestamps, or
-machine.
+A Git repository holds the database state. When you use the CLI or the
+`Database` / `Collection` API:
 
-Git commits and refs are deliberately outside that identity. They are an
-optional convenience layer for naming snapshots, recording history, coordinating
-writers, and using normal fetch/push workflows.
+- each collection is named by `refs/git-vdb/collections/<name>`;
+- creating a collection writes its initial tree and commit;
+- every successful upsert or delete produces an immutable root tree, creates a
+  new commit parented to the previous collection commit, and atomically advances
+  the collection ref;
+- queries read the root tree at the current ref, or at a historical root or
+  commit you specify;
+- collection history is ordinary Git commit history.
+
+There is no database server or hidden state outside the repository. Git objects
+hold the vectors, payloads, metadata, and search index. Git refs select the
+current version of each named collection.
+
+The root tree and commit have different roles. The tree is the database value:
+the same configuration and point set always produce the same root object ID,
+independent of insertion order, repository path, history, timestamps, or
+machine. The commit records when and how that value became the current named
+collection, so its identity may vary.
+
+A no-op mutation can reproduce the same root tree ID, but the named-collection
+layer still records the successful operation as a new commit.
+
+The lower-level `SnapshotEngine` exposes the tree layer directly. Its `build`,
+`apply`, and `query` operations use no collection name, commit, ref, clock, or
+history. This is useful when another system already owns naming, caching, or
+persistence and wants to pass the deterministic root around as a value.
 
 ```text
 deterministic snapshot engine
@@ -21,12 +41,12 @@ deterministic snapshot engine
     root + mutations -> new root tree
     root + query     -> scored points
 
-optional named-collection adapter
+default CLI and named-collection adapter
     root tree -> commit -> refs/git-vdb/collections/<name>
 ```
 
-This distinction is the project’s central design choice: **the tree is the
-database; the commit is history about the database.**
+The project’s central distinction is: **the tree is the database state; the
+commit records history about that state; the ref names the current state.**
 
 ## Semantics
 
