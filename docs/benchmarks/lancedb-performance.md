@@ -124,5 +124,14 @@ The observed prototype build was 1.168 seconds, but this is not yet an accepted
 performance claim: it was not interleaved with a same-executable baseline, its
 Git writer is a benchmark subprocess implementation, and its mutation path is a
 0.471-second full rebuild rather than the proposed changed-shard updater. The
-prototype also still needs x86/arm root comparison, 10,000- and 100,000-point
-runs, concurrency, RSS, packing/transfer, and incremental mutation evidence.
+prototype's concurrency 1/4 paths now execute real query batches. External
+measurement reports 60.6 MB peak RSS, versus 35.9 MB for the Rust version-1
+smoke runner, so the prototype does not claim a memory improvement.
+
+Explicit Git maintenance retains a readable base root. At this small tier the
+packed repository is 706,520 bytes, 8.4% larger than its 651,463-byte loose
+form; mirror clone and one-root fetch are 695,559 and 695,485 bytes. Pack headers
+and repository metadata dominate the small payload, so this is retained as
+negative evidence rather than extrapolated into a packing win. The prototype
+still needs x86/arm root comparison, 10,000- and 100,000-point runs, and a real
+incremental mutation implementation.
