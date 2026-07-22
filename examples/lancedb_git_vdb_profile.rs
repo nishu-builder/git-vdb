@@ -1,4 +1,6 @@
-use git_vdb::{CollectionConfig, Point, Query, QueryParams, SnapshotEngine};
+use git_vdb::{
+    CollectionConfig, Point, PointId, Query, QueryParams, SnapshotEngine, SnapshotMutation,
+};
 use serde::Deserialize;
 use serde_json::{json, Map};
 use std::env;
@@ -32,11 +34,109 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mode.to_str().ok_or("query mode is not UTF-8")?,
             Path::new(output),
         ),
+        [command, input, repository, build_report, fraction, output] if command == "mutate" => {
+            mutate(
+                Path::new(input),
+                Path::new(repository),
+                Path::new(build_report),
+                fraction
+                    .to_str()
+                    .ok_or("mutation fraction is not UTF-8")?
+                    .parse()?,
+                Path::new(output),
+            )
+        }
+        [command, repository, build_report, output] if command == "validate" => validate(
+            Path::new(repository),
+            Path::new(build_report),
+            Path::new(output),
+        ),
         _ => Err(
-            "usage: lancedb_git_vdb_profile build INPUT.json REPOSITORY OUTPUT.json\n       lancedb_git_vdb_profile query INPUT.json REPOSITORY BUILD.json exact|approximate OUTPUT.json"
+            "usage: lancedb_git_vdb_profile build INPUT.json REPOSITORY OUTPUT.json\n       lancedb_git_vdb_profile query INPUT.json REPOSITORY BUILD.json exact|approximate OUTPUT.json\n       lancedb_git_vdb_profile mutate INPUT.json REPOSITORY BUILD.json FRACTION OUTPUT.json\n       lancedb_git_vdb_profile validate REPOSITORY BUILD.json OUTPUT.json"
                 .into(),
         ),
     }
+}
+
+fn mutate(
+    input: &Path,
+    repository: &Path,
+    build_report: &Path,
+    fraction: f64,
+    output: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let spec = read_spec(input)?;
+    if !(0.0..=1.0).contains(&fraction) || fraction == 0.0 {
+        return Err("mutation fraction must be greater than zero and at most one".into());
+    }
+    let vectors = read_vectors(&spec.points_path, spec.point_count, spec.dimension)?;
+    let points = make_points(&vectors);
+    let count = ((spec.point_count as f64 * fraction).round() as usize).clamp(1, spec.point_count);
+    let mut changed = points[..count].to_vec();
+    for point in &mut changed {
+        point.vector[0] += 0.001;
+    }
+    let build: serde_json::Value = serde_json::from_slice(&fs::read(build_report)?)?;
+    let root = build
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("build report root is missing")?;
+    let engine = SnapshotEngine::open(repository)?;
+
+    let upsert_started = Instant::now();
+    let upserted = engine.apply(
+        root,
+        changed.into_iter().map(SnapshotMutation::upsert).collect(),
+    )?;
+    let upsert_us = micros(upsert_started);
+    let delete_started = Instant::now();
+    let deleted = engine.apply(
+        root,
+        vec![SnapshotMutation::delete_ids(
+            (0..count).map(|id| PointId::from(id as u64)),
+        )],
+    )?;
+    let delete_us = micros(delete_started);
+    fs::write(
+        output,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "root": root,
+            "fraction": fraction,
+            "points": count,
+            "upsert_us": upsert_us,
+            "delete_us": delete_us,
+            "upsert_root": upserted.root(),
+            "delete_root": deleted.root(),
+            "on_disk_bytes_after": directory_bytes(repository)?,
+        }))?,
+    )?;
+    Ok(())
+}
+
+fn validate(
+    repository: &Path,
+    build_report: &Path,
+    output: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let build: serde_json::Value = serde_json::from_slice(&fs::read(build_report)?)?;
+    let root = build
+        .get("root")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("build report root is missing")?;
+    let engine = SnapshotEngine::open(repository)?;
+    let started = Instant::now();
+    let report = engine.validate(root, true)?;
+    fs::write(
+        output,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "root": root,
+            "validation_us": micros(started),
+            "report": report,
+        }))?,
+    )?;
+    Ok(())
 }
 
 fn build(input: &Path, repository: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
