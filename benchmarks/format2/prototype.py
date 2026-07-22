@@ -10,6 +10,7 @@ format obligations are accepted.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import math
@@ -22,7 +23,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
+# These must be set before NumPy loads its BLAS implementation.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
+import numpy as np  # noqa: E402
 
 
 SHARD_BITS = 12
@@ -432,6 +438,28 @@ def filtered_metrics(index: PrototypeIndex, queries: np.ndarray, ks: list[int], 
     }
 
 
+def query_throughput(index: PrototypeIndex, queries: np.ndarray, limit: int, exact: bool) -> dict:
+    output = {}
+    for workers in (1, 4):
+        def execute(query: np.ndarray) -> None:
+            if exact:
+                rank(query, index)[:limit]
+            else:
+                candidates = approximate_candidates(query, index)
+                rank(query, index, candidates)[:limit]
+
+        started = time.perf_counter_ns()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(execute, queries))
+        wall_us = (time.perf_counter_ns() - started) // 1000
+        output[str(workers)] = {
+            "queries": len(queries),
+            "wall_us": wall_us,
+            "queries_per_second": len(queries) * 1_000_000.0 / wall_us,
+        }
+    return output
+
+
 def directory_bytes(path: Path) -> int:
     return sum(entry.stat().st_size for entry in path.rglob("*") if entry.is_file())
 
@@ -477,6 +505,10 @@ def main() -> None:
     reversed_mutated_root = write_root(writer, reversed_mutated_index)
     mutated_blobs = writer.root_blobs(mutated_root)
     queries_report = query_metrics(index, queries, spec["k"])
+    queries_report["throughput"] = {
+        "exact": query_throughput(index, queries, max(spec["k"]), True),
+        "approximate": query_throughput(index, queries, max(spec["k"]), False),
+    }
     filtered = {
         str(selectivity): filtered_metrics(index, queries, spec["k"], selectivity)
         for selectivity in spec["filter_selectivities"]
@@ -530,9 +562,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Prevent implicit multi-threaded BLAS from making timing and reduction order
-    # depend on the host's default thread pool.
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
     main()
