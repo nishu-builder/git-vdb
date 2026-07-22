@@ -35,14 +35,15 @@ Arguments are point count, dimension, and query count. The standard matrix is
 1,000, 10,000, and 100,000 points at dimension 768, 100 deterministic queries,
 32 clusters, and the format defaults documented in `format.md`.
 
-The harness reports recall@1, recall@5, recall@10, median vectors-scored
+The older example reports recall@1, recall@5, recall@10, median vectors-scored
 fraction, build milliseconds, total exact/approximate query milliseconds, and
-loose object bytes. Git object reads are not yet instrumented at the ODB layer;
-query stats instead report canonical bucket and vector work. Packed size,
-payload-only/vector/delete reuse matrices, hardware/revision capture, and the
-full 100,000-point run remain outstanding. This omission is explicit because
-inventing benchmark numbers would be worse than leaving the defaults
-provisional.
+loose object bytes. The maintained differential harness additionally captures
+hardware and revision metadata, exact-oracle agreement, filtered recall, peak
+RSS, concurrency-1/4 throughput, mutation fractions, and the full pinned
+100,000-point GloVe-25 run. Git object reads are not yet instrumented at the ODB
+layer; packed size and clone/fetch transfer measurements also remain
+outstanding. This omission is explicit because inventing benchmark numbers
+would be worse than leaving the defaults provisional.
 
 ## Recorded run
 

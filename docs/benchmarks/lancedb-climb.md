@@ -261,29 +261,70 @@ and recall gates. git-vdb also fails k=100 result count at 10% selectivity and
 both fail it at 1%. These approximate timings are reported as negative evidence,
 not accepted performance. Version 1 random-hyperplane LSH remains provisional.
 
+## Pinned 100,000-point real-data protocol
+
+The complete `real-glove-25.json` protocol ran five cold repetitions over
+100,000 train vectors and 100 test vectors on an EC2 `m6i.2xlarge`: Intel Xeon
+Platinum 8375C, 8 logical CPUs, 30.8 GiB RAM, x86_64 Linux. Revision `20776c5`
+records actual concurrency-1/4 throughput, externally measured peak RSS, and
+Linux CPU metadata. Raw output is
+`target/lancedb-results/real-glove-25-angular-20260722T013255Z`; the SHA-256 of
+`summary.json` is
+`cbd20eb1837689becfbc5f5c6ba2d2a8a5aea0698571104b6d7a531f2ac69a82`.
+
+| Metric | git-vdb snapshot core | LanceDB 0.34.0 |
+|---|---:|---:|
+| Build p50 | 53.445 s | 2.560 s |
+| Exact query p50 | 26.768 ms | 7.959 ms |
+| Approximate query p50 | 211.717 ms | 1.939 ms |
+| Exact throughput, concurrency 1 | 45.1 qps | 123.1 qps |
+| Exact throughput, concurrency 4 | 157.0 qps | 264.3 qps |
+| Approximate throughput, concurrency 1 | 5.27 qps | 519.3 qps |
+| Approximate throughput, concurrency 4 | 19.39 qps | 891.0 qps |
+| Approximate recall@1 | 0.970 | 0.950 |
+| Approximate recall@10 | 0.904 | 0.902 |
+| Approximate recall@100 | 0.793 | 0.835 |
+| Peak RSS p50 | 2.550 GB | 0.957 GB |
+| On-disk bytes/point | 1,186.1 | 206.1 |
+| 1% upsert p50 | 4.144 s | 7.255 ms |
+| 1% delete p50 | 3.944 s | 2.750 ms |
+
+Both engines and the named adapter agree with the independent exact oracle at
+k=1/10/100 for unfiltered and all filtered searches. Maximum exact score error
+is `2.98e-8` for git-vdb and `2.18e-7` for LanceDB. git-vdb's named-adapter
+exact throughput is 32.5 qps at concurrency 1 and 125.0 qps at concurrency 4;
+its historical-read p50 is 0.297 ms.
+
+The full-size result reverses the 10,000-point Apple-silicon exact-latency win:
+LanceDB is faster and smaller for every measured resource and timing category
+at 100,000 points. git-vdb has slightly higher unfiltered recall@1 and recall@10,
+while LanceDB has higher recall@100. At 1% selectivity both engines fail the
+approximate k=100 result-count gate. At 0.1%, git-vdb fails k=10/100 and LanceDB
+fails k=1/10/100. Those filtered ANN operating points remain negative evidence.
+
 ## Stop condition and next rung
 
-The reproducible harness, synthetic smoke baseline, pinned-real baseline, exact
-correctness gates, and six accepted improvement rungs are complete. The current
-small safe frontier has been exhausted: exact query now scores cached points in
-memory, and ID mutation work is proportional to directly loaded IDs and changed
-Git tree paths. Remaining profiles point to fundamental version-1 costs:
+The reproducible harness, synthetic smoke baseline, pinned 10,000- and
+100,000-point real baselines, exact correctness gates, and six accepted
+improvement rungs are complete. The current small safe frontier has been
+exhausted: exact query now scores cached points in memory, and ID mutation work
+is proportional to directly loaded IDs and changed Git tree paths. Remaining
+profiles point to fundamental version-1 costs:
 12 canonical LSH entries per point, loose Git object creation/tree validation,
 and an ANN recall frontier that cannot be fixed by timing-only patches.
 
-The 100,000-point full protocol is not accepted evidence yet. This machine has
-about 11 GiB free, and the protocol's independent 100% mutation databases plus
-raw runs do not leave safe storage headroom at ten times the real-smoke tier.
-Proceeding requires additional scratch storage/hardware or a narrower user-
-approved protocol. A material ANN improvement requires a reviewed format-2
-design; it must not silently change format version 1.
+The former local-storage stop was cleared by the 200 GiB remote box. The full
+protocol peaked with more than 166 GiB still free and is accepted evidence. A
+material ANN improvement still requires a reviewed format-2 design; it must not
+silently change format version 1.
 
 The highest-leverage next rung is a version-2 proposal for a deterministic,
 history-independent IVF-flat layout, evaluated first on the pinned 100,000-point
 real dataset. For version 1, the next observability rung is ODB-level object/
 byte read instrumentation plus packed-repository and clone/fetch transfer
 measurements; the current harness reports vectors scored, loose disk bytes, and
-logical structural reuse but does not claim those missing counters.
+logical structural reuse, process concurrency, and peak RSS but does not claim
+the remaining ODB or transfer counters.
 
 ## Reproduction and accepted commits
 
@@ -295,6 +336,9 @@ nix develop -c uv run --frozen --project benchmarks/lancedb \
 nix develop -c uv run --frozen --project benchmarks/lancedb \
   python benchmarks/lancedb/harness.py \
   --workload benchmarks/lancedb/workloads/real-smoke.json
+nix develop -c uv run --frozen --project benchmarks/lancedb \
+  python benchmarks/lancedb/harness.py \
+  --workload benchmarks/lancedb/workloads/real-glove-25.json
 ```
 
 Accepted local commits, in order:
@@ -307,9 +351,14 @@ Accepted local commits, in order:
 - `938ac31` — unchanged point-tree reuse;
 - `5b54f67` — changed-path-only canonical tree updates;
 - `e1d2809` — touched-ID-only mutation reads;
-- `b5781e2` — pinned real-data smoke workload.
+- `b5781e2` — pinned real-data smoke workload;
+- `20776c5` — executed concurrency, peak RSS, and Linux CPU metadata.
 
 Rejected or invalid evidence retained in this log: non-interleaved whole-run
 comparisons whose unrelated build/approximate variance exceeded 5%, and the
 first named-cache representation whose 5.2% RSS increase crossed the material
-threshold. No test or workload was weakened to obtain an accepted result.
+threshold. The first 100,000-point run at revision `7cb59dd`, retained in
+`real-glove-25-angular-20260722T002333Z`, was rejected because its workload
+declared concurrency 1/4 without executing it and did not capture peak RSS or
+Linux CPU identity. No test or workload was weakened to obtain an accepted
+result.

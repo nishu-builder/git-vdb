@@ -24,9 +24,11 @@ part of `nix flake check` and must be requested explicitly.
 Each repetition starts fresh runner processes and databases. Setup, immutable
 snapshot build, named-adapter build, and LanceDB IVF-flat index build are
 reported separately in raw results. Each runner performs one unmeasured query
-in each mode before recording warm-process query samples. The smoke profile is
-for correctness and harness iteration; it is not sufficient for broad
-performance claims.
+in each mode before recording warm-process query samples. Declared concurrency
+levels run as separate throughput batches and are not mixed with single-query
+latency. `/usr/bin/time` records peak process RSS for every engine repetition.
+The smoke profile exercises concurrency 1/4 for correctness and harness
+iteration; it is not sufficient for broad performance claims.
 
 Payloads contain `selectivity_bucket = uint64_id modulo 1000`, giving exact
 50%, 10%, 1%, and 0.1% filters whenever the point count is a multiple of 1,000.
