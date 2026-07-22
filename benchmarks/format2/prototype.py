@@ -748,7 +748,7 @@ def main() -> None:
         "queries": queries_report,
         "filtered": filtered,
         "limitations": [
-            "prototype uses NumPy floating-point reductions; cross-platform root equality is a required external gate",
+            "tested arm64 and x86_64 roots match; additional NumPy, BLAS, compiler, and platform combinations remain external gates",
             "mutation still recomputes centroid training and assignment globally; only the Git serialization is changed-shard-aware",
             "phase RSS must still be captured externally with /usr/bin/time",
             "historical named-adapter reads are not implemented by this standalone prototype",
