@@ -70,7 +70,7 @@ score, order, memory-lifetime, approximate-search, or public API change.
 Norm hoisting/caching remains a separate later candidate because arithmetic
 reuse and top-k work reduction must not be combined before either is measured.
 
-### A2 result: accepted pending full-protocol graduation
+### A2 result: accepted
 
 The first candidate uses `select_nth_unstable_by` with the complete score/typed-ID
 ordering, truncates to k, and stably orders only the selected k. Scoring and
@@ -95,8 +95,128 @@ Peak RSS fell slightly from about 1,049,270 KiB to 1,045,721 KiB. The unchanged
 differential smoke run at `target/lancedb-results/smoke-20260722T035008Z` keeps
 the exact oracle green at k=1/10/100 for both synthetic distributions and every
 filter selectivity; its maximum `git-vdb` score error remains below `2.98e-8`.
-No approximate code changed. Final acceptance requires the full repository gate
-and the pinned five-repetition 100,000-point protocol at the candidate revision.
+No approximate code changed.
+
+The clean candidate revision `f578b1b` completed that protocol on the retained
+`m6i.2xlarge`. Raw results are under
+`/home/ubuntu/git-vdb-lancedb-climb/target/lancedb-results/real-glove-25-angular-20260722T035425Z`;
+the summary SHA-256 is
+`591a9bb8a1c060eec6709efe1d5d2508028ab40eb96ff50b2717a0abc965cab2`.
+All five raw git-vdb outputs are identical to the accepted baseline after timing
+and resource fields are removed, including roots, exact and approximate ordered
+results and score bits, filters, named-adapter results, and mutation roots.
+
+| Metric | Accepted baseline | A2 candidate | Movement |
+|---|---:|---:|---:|
+| Exact query p50 | 26.768 ms | 16.385 ms | 38.8% lower |
+| Exact throughput, concurrency 1 | 44.74 qps | 84.07 qps | 87.9% higher |
+| Exact throughput, concurrency 4 | 157.0 qps | 275.3 qps | 75.3% higher |
+| Build p50 | 53.445 s | 53.887 s | 0.8% higher |
+| Approximate query p50 | 211.717 ms | 215.731 ms | 1.9% higher |
+| Peak RSS p50 | 2.550 GB | 2.525 GB | 1.0% lower |
+
+The candidate remains exact at k=1/10/100 with maximum score error
+`2.98e-8`. At this machine and workload it narrows exact latency from 3.4x to
+1.9x LanceDB, and its concurrency-4 exact throughput is 6.5% higher than the
+same-run LanceDB median. Build, approximate search, storage, and mutation remain
+structurally unchanged. Commit `f578b1b` is therefore graduated without a
+format-version-1 byte or semantic change.
+
+### A2 follow-ups: query norm rejected, bounded winners accepted pending graduation
+
+The query-norm candidate hoists the query squared norm out of the point loop
+without changing operation order for any score. Five interleaved retained-root
+pairs produced candidate/baseline batch ratios of 0.960, 0.997, 0.975, 0.986,
+and 0.966. The median gain is only 2.5%, below the 5% materiality threshold, so
+the candidate is rejected and its production patch remains unapplied.
+
+The bounded-winner candidate keeps borrowed point references and scores in a
+size-k binary heap, then clones IDs, payloads, and vectors only for final
+winners. Its complete score/typed-ID order is the heap order, including equal
+scores and signed zero. Focused tests cover typed-ID ties, zero vectors,
+filters, and limit zero. All five real-workload result sets and score bits are
+identical to A2 after timing fields are removed.
+
+| Pair | A2 batch | Bounded batch | Candidate / A2 | A2 p50 | Bounded p50 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 2.032 s | 1.137 s | 0.560 | 20.369 ms | 10.681 ms |
+| 2 | 2.063 s | 1.159 s | 0.562 | 20.502 ms | 11.343 ms |
+| 3 | 2.070 s | 1.028 s | 0.496 | 20.630 ms | 9.900 ms |
+| 4 | 2.060 s | 1.041 s | 0.505 | 20.375 ms | 9.930 ms |
+| 5 | 2.079 s | 1.008 s | 0.485 | 20.656 ms | 9.729 ms |
+
+The median batch reduction is 49.5%. Process peak RSS falls from about
+1,045,740 KiB to 189,474 KiB because losing IDs and result objects are no
+longer retained. The differential smoke result at
+`target/lancedb-results/smoke-20260722T050749Z` is semantically identical to
+the unchanged implementation in both cases and all repetitions; its summary
+SHA-256 is
+`e13ebf8fc417cd5f908a073459209374bb5171c0ca923646cfc8d92dc468dc0b`.
+Local commit `653f110` is accepted pending the pinned five-repetition graduation.
+
+A new deterministic clustered 10,000 x 25 gate then exposed a pre-existing
+near-tie mismatch that the declared 1,000-point and GloVe workloads do not
+contain. Two distinct f64 cosine values can round to the same public f32 score;
+the old exact comparator then used ID order while the independent f64 oracle
+retained the true score order. Exact ranking now retains f64 internally and
+casts only returned scores to f32. A focused fixture proves that the higher f64
+score wins even when both public score bits are equal. The corrected 10,000-
+point run at `target/lancedb-results/format2-10k-smoke-20260722T052242Z` passes
+k=1/10/100 for unfiltered and every filter with maximum score error `2.98e-8`;
+its summary SHA-256 is
+`6a3b6f62dd0c26ab745ae4b1143ace72b6e03353ca516bfd37422e2938467ba7`.
+All declared smoke and GloVe ordered results remain unchanged. The first remote
+graduation attempt was stopped when this broader gate failed; only the corrected
+candidate is eligible to restart.
+
+## A4 hypothesis: reuse decoded points for approximate queries
+
+The A1 approximate profile attributes 86.7% of sampled CPU to candidate point
+decoding, while bucket discovery accounts for only 2.2%. The exact cache already
+owns every decoded point for an immutable root, but the approximate path ignores
+it and reopens each candidate point tree and its ID/vector/payload blobs on every
+query. The first A4 candidate will add a compact, ephemeral point-tree-OID to
+cache-index lookup and score candidates from the same root-scoped decoded point
+view. Bucket discovery, candidate order and limits, hash/tree validation,
+filtering, scoring, and returned values remain unchanged. The lookup is derived
+only from the root's canonical point tree, shared across handle clones, and
+discarded when a named collection root changes.
+
+The expected warm-query gain is material because it removes repeated blob
+decoding without adding an in-memory postings copy. Approximate-only use does
+not instantiate the exact point cache and retains the unchanged ODB path. When
+the exact view already exists, lookup construction time and RSS are explicit
+costs: it traverses the canonical points tree once and retains one Git OID plus
+an index per point. This candidate is rejected if ordered approximate IDs or
+score bits change at any operating point, if construction erases the repeated-
+query gain, or if an important memory or exact metric regresses by 5%.
+
+### A4 result: accepted pending full-protocol graduation
+
+Five interleaved pairs used the same retained root and first built the exact
+view in both executables. The A4 candidate then constructed its point-tree OID
+lookup during an unmeasured-but-reported approximate warmup. Baseline and
+candidate ordered results, score bits, and vectors-scored arrays are identical
+in every pair.
+
+| Pair | Baseline batch | A4 batch | Candidate / baseline | Baseline p50 | A4 p50 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 20.678 s | 2.999 s | 0.145 | 230.940 ms | 30.759 ms |
+| 2 | 20.643 s | 3.089 s | 0.150 | 229.997 ms | 32.027 ms |
+| 3 | 20.486 s | 3.116 s | 0.152 | 228.943 ms | 32.077 ms |
+| 4 | 21.129 s | 3.248 s | 0.154 | 236.086 ms | 33.302 ms |
+| 5 | 21.194 s | 3.079 s | 0.145 | 236.956 ms | 31.414 ms |
+
+The median batch reduction is 85.0%. Exact-view construction remains within
+3.02--3.22 seconds in both executables. The candidate's first approximate
+warmup costs 307--321 ms versus 249--265 ms because it constructs the lookup;
+that one-time 56--72 ms cost is retained rather than hidden. Peak RSS rises
+from about 267,805 KiB to 270,276 KiB, or 0.9%, for the OID/index array.
+Approximate-only tests prove that an empty exact cache stays empty and follows
+the unchanged ODB path. The local differential smoke result at
+`target/lancedb-results/smoke-20260722T043327Z` has identical git-vdb semantics
+for both cases and all three repetitions. Full 100,000-point graduation remains
+required after the bounded exact candidate is graduated.
 
 ## Format-2 prototype: first canonical-layout smoke
 

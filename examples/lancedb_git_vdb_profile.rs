@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Path::new(output),
         ),
         _ => Err(
-            "usage: lancedb_git_vdb_profile build INPUT.json REPOSITORY OUTPUT.json\n       lancedb_git_vdb_profile query INPUT.json REPOSITORY BUILD.json exact|approximate OUTPUT.json\n       lancedb_git_vdb_profile mutate INPUT.json REPOSITORY BUILD.json FRACTION OUTPUT.json\n       lancedb_git_vdb_profile validate REPOSITORY BUILD.json OUTPUT.json"
+            "usage: lancedb_git_vdb_profile build INPUT.json REPOSITORY OUTPUT.json\n       lancedb_git_vdb_profile query INPUT.json REPOSITORY BUILD.json exact|approximate|approximate-after-exact OUTPUT.json\n       lancedb_git_vdb_profile mutate INPUT.json REPOSITORY BUILD.json FRACTION OUTPUT.json\n       lancedb_git_vdb_profile validate REPOSITORY BUILD.json OUTPUT.json"
                 .into(),
         ),
     }
@@ -173,9 +173,10 @@ fn query(
     mode: &str,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let exact = match mode {
-        "exact" => true,
-        "approximate" => false,
+    let (exact, warm_exact) = match mode {
+        "exact" => (true, false),
+        "approximate" => (false, false),
+        "approximate-after-exact" => (false, true),
         _ => return Err(format!("unsupported query mode: {mode}").into()),
     };
     let spec = read_spec(input)?;
@@ -189,9 +190,19 @@ fn query(
     let engine = SnapshotEngine::open(repository)?;
     let snapshot = engine.open_snapshot(root)?;
 
-    // Fill the immutable snapshot cache or warm the approximate ODB path without
+    let cache_build_us = if warm_exact {
+        let started = Instant::now();
+        snapshot.query(make_query(&queries[0], maximum_k, true))?;
+        Some(micros(started))
+    } else {
+        None
+    };
+    // Fill the immutable snapshot cache, construct an approximate lookup over an
+    // already-warm exact view, or warm the unchanged approximate ODB path without
     // including that one-time work in the samples.
+    let warmup_started = Instant::now();
     snapshot.query(make_query(&queries[0], maximum_k, exact))?;
+    let warmup_us = micros(warmup_started);
     wait_for_profiler()?;
 
     let mut query_us = Vec::with_capacity(queries.len());
@@ -212,6 +223,8 @@ fn query(
             "schema_version": 1,
             "root": root,
             "mode": mode,
+            "cache_build_us": cache_build_us,
+            "warmup_us": warmup_us,
             "query_us": query_us,
             "batch_us": batch_us,
             "vectors_scored": vectors_scored,

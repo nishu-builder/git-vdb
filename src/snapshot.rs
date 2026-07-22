@@ -2,6 +2,7 @@ use crate::filter::matches_filter;
 use crate::root::{
     build_root, count_root, get_root, query_root_with_cache, read_meta, read_point_by_id,
     read_stored_points, update_root, validate_config, validate_point, validate_root, PointChange,
+    SearchView,
 };
 use crate::{
     CollectionConfig, CountResult, Error, GetRequest, GetResult, ObjectId, Point, PointId, Query,
@@ -35,7 +36,7 @@ pub struct SnapshotEngine {
 pub struct Snapshot {
     object_database: PathBuf,
     root: Oid,
-    points: Arc<OnceLock<Vec<Point>>>,
+    points: Arc<OnceLock<SearchView>>,
     temporary: Option<Arc<TempDir>>,
 }
 
@@ -310,7 +311,7 @@ impl SnapshotEngine {
         let cache = OnceLock::new();
         if let Some(points) = points {
             cache
-                .set(points.into_values().collect())
+                .set(SearchView::new(points.into_values().collect()))
                 .expect("new snapshot point cache must be empty");
         }
         Snapshot {

@@ -64,6 +64,54 @@ pub(crate) struct StoredPoint {
     pub(crate) tree: Oid,
 }
 
+#[derive(Debug)]
+pub(crate) struct SearchView {
+    points: Vec<Point>,
+    point_trees: OnceLock<Vec<(Oid, usize)>>,
+}
+
+impl SearchView {
+    pub(crate) fn new(points: Vec<Point>) -> Self {
+        Self {
+            points,
+            point_trees: OnceLock::new(),
+        }
+    }
+
+    fn point_for_tree(&self, repo: &Repository, root: Oid, tree: Oid) -> Result<&Point> {
+        if self.point_trees.get().is_none() {
+            let mut indices = self
+                .points
+                .iter()
+                .enumerate()
+                .map(|(index, point)| (id_hash(&point.id), index))
+                .collect::<BTreeMap<_, _>>();
+            let mut point_trees = Vec::with_capacity(indices.len());
+            for (hash, point_tree) in point_tree_entries(repo, root)? {
+                let index = indices.remove(&hash).ok_or_else(|| {
+                    Error::Corrupt("root point tree does not match cached points".into())
+                })?;
+                point_trees.push((point_tree, index));
+            }
+            if !indices.is_empty() {
+                return Err(Error::Corrupt(
+                    "cached points do not match the root point tree".into(),
+                ));
+            }
+            point_trees.sort_unstable_by_key(|(oid, _)| *oid);
+            let _ = self.point_trees.set(point_trees);
+        }
+        let point_trees = self
+            .point_trees
+            .get()
+            .expect("search-view point-tree lookup was initialized");
+        let index = point_trees
+            .binary_search_by_key(&tree, |(oid, _)| *oid)
+            .map_err(|_| Error::Corrupt("bucket points outside the root point tree".into()))?;
+        Ok(&self.points[point_trees[index].1])
+    }
+}
+
 pub(crate) struct PointChange {
     pub(crate) old: Option<Point>,
     pub(crate) new: Option<Point>,
@@ -175,7 +223,7 @@ pub(crate) fn query_root_with_cache(
     repo: &Repository,
     root: Oid,
     query: Query,
-    cached_points: Option<&OnceLock<Vec<Point>>>,
+    cached_points: Option<&OnceLock<SearchView>>,
 ) -> Result<QueryResult> {
     let meta = read_meta(repo, root)?;
     validate_query(&query, &meta)?;
@@ -187,19 +235,23 @@ pub(crate) fn query_root_with_cache(
         if let Some(cache) = cached_points {
             if cache.get().is_none() {
                 let points = read_all_points(repo, root)?.into_values().collect();
-                let _ = cache.set(points);
+                let _ = cache.set(SearchView::new(points));
             }
             exact_query_points(
                 root,
                 &meta,
                 query,
-                cache.get().expect("snapshot point cache was initialized"),
+                &cache
+                    .get()
+                    .expect("snapshot point cache was initialized")
+                    .points,
             )
         } else {
             exact_query(repo, root, &meta, query)
         }
     } else {
-        approximate_query(repo, root, &meta, query)
+        let cached_points = cached_points.and_then(OnceLock::get);
+        approximate_query(repo, root, &meta, query, cached_points)
     }
 }
 
@@ -736,14 +788,19 @@ fn exact_query(repo: &Repository, root: Oid, meta: &RootMeta, query: Query) -> R
             continue;
         }
         vectors_scored += 1;
-        scored.push(ScoredPoint {
-            id,
-            score: cosine(&query.vector, &vector),
-            payload: query.with_payload.then(|| payload.unwrap_or_default()),
-            vector: query.with_vector.then_some(vector),
+        let ranking_score = cosine_f64(&query.vector, &vector);
+        scored.push(RankedScoredPoint {
+            ranking_score,
+            point: ScoredPoint {
+                id,
+                score: ranking_score as f32,
+                payload: query.with_payload.then(|| payload.unwrap_or_default()),
+                vector: query.with_vector.then_some(vector),
+            },
         });
     }
-    select_and_truncate(&mut scored, query.limit);
+    select_ranked_and_truncate(&mut scored, query.limit);
+    let scored = scored.into_iter().map(|ranked| ranked.point).collect();
     Ok(QueryResult {
         root: root.into(),
         points: scored,
@@ -776,11 +833,14 @@ fn exact_query_points(
             continue;
         }
         vectors_scored += 1;
-        let score = cosine(&query.vector, &point.vector);
+        let ranking_score = cosine_f64(&query.vector, &point.vector);
         if query.limit == 0 {
             continue;
         }
-        let candidate = ScoredPointRef { point, score };
+        let candidate = ScoredPointRef {
+            point,
+            ranking_score,
+        };
         if winners.len() < query.limit {
             winners.push(candidate);
         } else if winners
@@ -797,7 +857,7 @@ fn exact_query_points(
         .into_iter()
         .map(|winner| ScoredPoint {
             id: winner.point.id.clone(),
-            score: winner.score,
+            score: winner.ranking_score as f32,
             payload: query.with_payload.then(|| winner.point.payload.clone()),
             vector: query.with_vector.then(|| winner.point.vector.clone()),
         })
@@ -822,6 +882,7 @@ fn approximate_query(
     root: Oid,
     meta: &RootMeta,
     query: Query,
+    cached_points: Option<&SearchView>,
 ) -> Result<QueryResult> {
     let probes = if query.params.probes == 0 {
         meta.index.default_probes
@@ -867,6 +928,29 @@ fn approximate_query(
     let mut scored = Vec::new();
     let mut vectors_scored = 0;
     for (hash, point_tree) in candidates {
+        if let Some(cache) = cached_points {
+            let point = cache.point_for_tree(repo, root, point_tree)?;
+            if id_hash(&point.id) != hash {
+                return Err(Error::Corrupt(
+                    "bucket entry points to a mismatched point".into(),
+                ));
+            }
+            if query
+                .filter
+                .as_ref()
+                .is_some_and(|filter| !matches_filter(filter, &point.id, &point.payload))
+            {
+                continue;
+            }
+            vectors_scored += 1;
+            scored.push(ScoredPoint {
+                id: point.id.clone(),
+                score: cosine(&query.vector, &point.vector),
+                payload: query.with_payload.then(|| point.payload.clone()),
+                vector: query.with_vector.then(|| point.vector.clone()),
+            });
+            continue;
+        }
         let (id, vector, payload) = read_point_parts(repo, point_tree, needs_payload)?;
         if id_hash(&id) != hash {
             return Err(Error::Corrupt(
@@ -911,6 +995,7 @@ fn sort_and_truncate(points: &mut Vec<ScoredPoint>, limit: usize) {
     points.truncate(limit);
 }
 
+#[cfg(test)]
 fn select_and_truncate(points: &mut Vec<ScoredPoint>, limit: usize) {
     if limit == 0 {
         points.clear();
@@ -938,9 +1023,46 @@ fn compare_score_and_id(
         .then_with(|| left_id.cmp(right_id))
 }
 
+struct RankedScoredPoint {
+    point: ScoredPoint,
+    ranking_score: f64,
+}
+
+fn select_ranked_and_truncate(points: &mut Vec<RankedScoredPoint>, limit: usize) {
+    if limit == 0 {
+        points.clear();
+        return;
+    }
+    if points.len() > limit {
+        points.select_nth_unstable_by(limit, compare_ranked_points);
+        points.truncate(limit);
+    }
+    points.sort_by(compare_ranked_points);
+}
+
+fn compare_ranked_points(left: &RankedScoredPoint, right: &RankedScoredPoint) -> Ordering {
+    compare_rank_and_id(
+        left.ranking_score,
+        &left.point.id,
+        right.ranking_score,
+        &right.point.id,
+    )
+}
+
+fn compare_rank_and_id(
+    left_score: f64,
+    left_id: &PointId,
+    right_score: f64,
+    right_id: &PointId,
+) -> Ordering {
+    right_score
+        .total_cmp(&left_score)
+        .then_with(|| left_id.cmp(right_id))
+}
+
 struct ScoredPointRef<'a> {
     point: &'a Point,
-    score: f32,
+    ranking_score: f64,
 }
 
 impl PartialEq for ScoredPointRef<'_> {
@@ -959,11 +1081,20 @@ impl PartialOrd for ScoredPointRef<'_> {
 
 impl Ord for ScoredPointRef<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
-        compare_score_and_id(self.score, &self.point.id, other.score, &other.point.id)
+        compare_rank_and_id(
+            self.ranking_score,
+            &self.point.id,
+            other.ranking_score,
+            &other.point.id,
+        )
     }
 }
 
 fn cosine(left: &[f32], right: &[f32]) -> f32 {
+    cosine_f64(left, right) as f32
+}
+
+fn cosine_f64(left: &[f32], right: &[f32]) -> f64 {
     let mut dot = 0.0_f64;
     let mut left_norm = 0.0_f64;
     let mut right_norm = 0.0_f64;
@@ -977,7 +1108,7 @@ fn cosine(left: &[f32], right: &[f32]) -> f32 {
     if left_norm == 0.0 || right_norm == 0.0 {
         0.0
     } else {
-        (dot / (left_norm.sqrt() * right_norm.sqrt())) as f32
+        dot / (left_norm.sqrt() * right_norm.sqrt())
     }
 }
 
@@ -1372,6 +1503,52 @@ mod tests {
         assert_eq!(empty.stats.vectors_scored, 4);
     }
 
+    #[test]
+    fn exact_ranking_uses_f64_before_public_score_rounding() {
+        let temp = TempDir::new().unwrap();
+        let db = Database::init(temp.path()).unwrap();
+        let collection = db
+            .create_collection(
+                "near-ties",
+                CollectionConfig {
+                    dimension: 3,
+                    ..CollectionConfig::default()
+                },
+            )
+            .unwrap();
+        collection
+            .upsert(vec![
+                Point {
+                    id: "z-higher".into(),
+                    vector: vec![0.35979405, -0.9917066, 0.13241175],
+                    payload: JsonObject::new(),
+                },
+                Point {
+                    id: "a-lower".into(),
+                    vector: vec![0.7231045, 0.25723642, -0.009842582],
+                    payload: JsonObject::new(),
+                },
+            ])
+            .unwrap();
+        let result = collection
+            .query(Query {
+                vector: vec![0.731, -0.281, 0.619],
+                limit: 2,
+                params: QueryParams {
+                    exact: Some(true),
+                    ..QueryParams::default()
+                },
+                ..Query::default()
+            })
+            .unwrap();
+        assert_eq!(result.points[0].id, PointId::from("z-higher"));
+        assert_eq!(result.points[1].id, PointId::from("a-lower"));
+        assert_eq!(
+            result.points[0].score.to_bits(),
+            result.points[1].score.to_bits()
+        );
+    }
+
     fn scored(id: impl Into<PointId>, score: f32) -> ScoredPoint {
         ScoredPoint {
             id: id.into(),
@@ -1430,19 +1607,40 @@ mod tests {
             },
             ..Query::default()
         };
+        let approximate = || Query {
+            vector: vec![1.0, 0.0],
+            limit: 10,
+            params: QueryParams {
+                exact: Some(false),
+                ..QueryParams::default()
+            },
+            ..Query::default()
+        };
         assert_eq!(collection.query(exact()).unwrap().points.len(), 1);
+        assert_eq!(
+            collection.query(approximate()).unwrap().root,
+            collection.root().unwrap()
+        );
 
         collection
             .clone()
             .upsert(vec![point("b", [0.9, 0.1], "clone")])
             .unwrap();
         assert_eq!(collection.query(exact()).unwrap().points.len(), 2);
+        assert_eq!(
+            collection.query(approximate()).unwrap().root,
+            collection.root().unwrap()
+        );
 
         db.collection("notes")
             .unwrap()
             .upsert(vec![point("c", [0.8, 0.2], "other-handle")])
             .unwrap();
         assert_eq!(collection.query(exact()).unwrap().points.len(), 3);
+        assert_eq!(
+            collection.query(approximate()).unwrap().root,
+            collection.root().unwrap()
+        );
     }
 
     #[test]
@@ -1466,6 +1664,59 @@ mod tests {
         assert_eq!(result.stats.mode, QueryMode::Approximate);
         assert!(result.stats.vectors_scored <= 10);
         assert!(result.stats.buckets_probed <= 1);
+    }
+
+    #[test]
+    fn approximate_search_view_matches_uncached_results() {
+        let (temp, _db, collection) = database();
+        let points = (0..100)
+            .map(|id| {
+                point(
+                    id as u64,
+                    [id as f32 + 1.0, (id % 7) as f32 - 3.0],
+                    if id % 2 == 0 { "even" } else { "odd" },
+                )
+            })
+            .collect();
+        collection.upsert(points).unwrap();
+        let query = Query {
+            vector: vec![10.0, 1.0],
+            limit: 20,
+            filter: Some(Filter::must([Condition::matches("topic", "even")])),
+            with_payload: true,
+            with_vector: true,
+            params: QueryParams {
+                exact: Some(false),
+                probes: 8,
+                candidate_limit: 75,
+            },
+            ..Query::default()
+        };
+        let repo = Repository::open(temp.path()).unwrap();
+        let root = Oid::from_str(collection.root().unwrap().as_ref()).unwrap();
+        let uncached = query_root_with_cache(&repo, root, query.clone(), None).unwrap();
+        let cold_cache = OnceLock::new();
+        let cold_cached =
+            query_root_with_cache(&repo, root, query.clone(), Some(&cold_cache)).unwrap();
+        assert!(cold_cache.get().is_none());
+        let cache = OnceLock::new();
+        let mut exact_warmup = query.clone();
+        exact_warmup.params.exact = Some(true);
+        query_root_with_cache(&repo, root, exact_warmup, Some(&cache)).unwrap();
+        let cached = query_root_with_cache(&repo, root, query.clone(), Some(&cache)).unwrap();
+        let cached_again = query_root_with_cache(&repo, root, query, Some(&cache)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&cold_cached).unwrap(),
+            serde_json::to_value(&uncached).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&cached).unwrap(),
+            serde_json::to_value(&uncached).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&cached_again).unwrap(),
+            serde_json::to_value(&uncached).unwrap()
+        );
     }
 
     #[test]

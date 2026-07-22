@@ -1,6 +1,6 @@
 use crate::root::{
     count_root, diff_roots, get_root, query_root_with_cache, read_meta, validate_config,
-    validate_root,
+    validate_root, SearchView,
 };
 use crate::*;
 use git2::{Commit, Oid, Repository, Signature};
@@ -31,7 +31,7 @@ pub struct Collection {
 #[derive(Debug)]
 struct CollectionQueryCache {
     root: Option<Oid>,
-    points: Arc<OnceLock<Vec<Point>>>,
+    points: Arc<OnceLock<SearchView>>,
 }
 
 impl Default for CollectionQueryCache {
