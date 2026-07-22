@@ -97,3 +97,32 @@ the exact oracle green at k=1/10/100 for both synthetic distributions and every
 filter selectivity; its maximum `git-vdb` score error remains below `2.98e-8`.
 No approximate code changed. Final acceptance requires the full repository gate
 and the pinned five-repetition 100,000-point protocol at the candidate revision.
+
+## Format-2 prototype: first canonical-layout smoke
+
+The standalone prototype in `benchmarks/format2/` is not linked into the stable
+API and cannot emit version 2 through a production writer. It materializes the
+proposed sharded point blobs, deterministic training sample, IVF centroids, and
+postings as real Git blobs and trees. Its first clustered 1,000 x 100 run is
+`target/lancedb-results/format2-prototype-smoke-final.json`.
+
+The prototype root is `3c8a634f8cbe628d86ca0dd9c06ebffd5f189c9c` in three
+independent executions. Reversing the complete input order produces the same
+root. The maintained independent exact oracle agrees at k=1/10/100 with zero
+recorded score error. Approximate recall is 1.000/1.000/0.9675 at k=1/10/100
+and every unfiltered result-count gate passes. Low-selectivity filtered ANN
+still underfills, so those timings are not improvement claims.
+
+The base root contains 2,687 unique blobs and 502,241 logical blob bytes; its
+loose repository occupies 651,463 file bytes. The comparable version-1 smoke
+run reports 1,551,757 bytes, so the candidate layout is 58.0% smaller at this
+tier before packing. A 1% vector update followed by a full canonical rebuild
+also has reverse-input root equality and shares 2,676/2,687 blobs and
+483,265/502,241 logical blob bytes with the base root.
+
+The observed prototype build was 1.168 seconds, but this is not yet an accepted
+performance claim: it was not interleaved with a same-executable baseline, its
+Git writer is a benchmark subprocess implementation, and its mutation path is a
+0.471-second full rebuild rather than the proposed changed-shard updater. The
+prototype also still needs x86/arm root comparison, 10,000- and 100,000-point
+runs, concurrency, RSS, packing/transfer, and incremental mutation evidence.
