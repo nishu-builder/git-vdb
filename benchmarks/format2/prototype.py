@@ -20,6 +20,7 @@ import struct
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,6 +113,11 @@ class GitWriter:
             ]
         )
 
+    def oid_tree(self, blobs: dict[str, str]) -> str:
+        return self.tree(
+            [("100644", "blob", oid, name) for name, oid in blobs.items()]
+        )
+
     def root_blobs(self, root: str) -> set[str]:
         output = self.command("ls-tree", "-r", root)
         return {
@@ -119,6 +125,16 @@ class GitWriter:
             for line in output.splitlines()
             if line and len(line.split(maxsplit=3)) == 4
         }
+
+    def root_blob_paths(self, root: str) -> dict[str, str]:
+        output = self.command("ls-tree", "-r", root)
+        paths = {}
+        for line in output.splitlines():
+            metadata, path = line.split("\t", maxsplit=1)
+            _mode, kind, oid = metadata.split()
+            if kind == "blob":
+                paths[path] = oid
+        return paths
 
 
 def parse_args() -> argparse.Namespace:
@@ -274,8 +290,12 @@ def encode_codebook(index: PrototypeIndex) -> bytes:
 
 
 def encode_sample(index: PrototypeIndex) -> bytes:
-    identifiers = index.ids[index.sample_indices].astype("<u8", copy=False)
-    return b"GTV2SMP\0" + struct.pack("<I", len(identifiers)) + identifiers.tobytes()
+    body = bytearray(b"GTV2SMP\0" + struct.pack("<I", len(index.sample_indices)))
+    for row in index.sample_indices:
+        body.extend(struct.pack("<Q", int(index.ids[row])))
+        vector = index.points[row].astype("<f4", copy=False).tobytes()
+        body.extend(hashlib.sha256(vector).digest())
+    return bytes(body)
 
 
 def encode_posting(index: PrototypeIndex, members: np.ndarray) -> bytes:
@@ -285,32 +305,84 @@ def encode_posting(index: PrototypeIndex, members: np.ndarray) -> bytes:
     return bytes(body)
 
 
-def write_root(writer: GitWriter, index: PrototypeIndex) -> str:
-    ids: dict[str, bytes] = {}
-    payloads: dict[str, bytes] = {}
-    vectors: dict[str, bytes] = {}
-    for shard in np.unique(index.shards[index.order]):
-        members = index.order[index.shards[index.order] == shard]
-        name = f"{int(shard):03x}.bin"
-        ids[name] = encode_ids(index, members)
-        payloads[name] = encode_payloads(index, members)
-        vectors[f"{int(shard):03x}.f32le"] = encode_vectors(index, members)
+def write_blob_group(
+    writer: GitWriter,
+    prefix: str,
+    values: list[tuple[str, np.ndarray]],
+    encode: Callable[[np.ndarray], bytes],
+    reuse_paths: dict[str, str],
+) -> str:
+    oids = {}
+    pending = {}
+    for name, members in values:
+        path = f"{prefix}/{name}"
+        if path in reuse_paths:
+            oids[name] = reuse_paths[path]
+        else:
+            pending[name] = encode(members)
+    if pending:
+        oids.update(writer.blobs(pending))
+    return writer.oid_tree(oids)
+
+
+def write_root(
+    writer: GitWriter,
+    index: PrototypeIndex,
+    reuse_paths: dict[str, str] | None = None,
+) -> str:
+    reuse_paths = reuse_paths or {}
+    shards = [
+        (
+            f"{int(shard):03x}",
+            index.order[index.shards[index.order] == shard],
+        )
+        for shard in np.unique(index.shards[index.order])
+    ]
+    ids_tree = write_blob_group(
+        writer,
+        "points/ids",
+        [(f"{name}.bin", members) for name, members in shards],
+        lambda members: encode_ids(index, members),
+        reuse_paths,
+    )
+    payloads_tree = write_blob_group(
+        writer,
+        "points/payloads",
+        [(f"{name}.bin", members) for name, members in shards],
+        lambda members: encode_payloads(index, members),
+        reuse_paths,
+    )
+    vectors_tree = write_blob_group(
+        writer,
+        "points/vectors",
+        [(f"{name}.f32le", members) for name, members in shards],
+        lambda members: encode_vectors(index, members),
+        reuse_paths,
+    )
     points_tree = writer.tree(
         [
-            ("040000", "tree", writer.blob_tree(ids), "ids"),
-            ("040000", "tree", writer.blob_tree(payloads), "payloads"),
-            ("040000", "tree", writer.blob_tree(vectors), "vectors"),
+            ("040000", "tree", ids_tree, "ids"),
+            ("040000", "tree", payloads_tree, "payloads"),
+            ("040000", "tree", vectors_tree, "vectors"),
         ]
     )
-    posting_blobs = {
-        f"{centroid:04x}.bin": encode_posting(index, members)
-        for centroid, members in enumerate(index.postings)
-    }
-    postings_tree = writer.blob_tree(posting_blobs)
+    postings_tree = write_blob_group(
+        writer,
+        "index/ivf-flat-v2/postings",
+        [(f"{centroid:04x}.bin", members) for centroid, members in enumerate(index.postings)],
+        lambda members: encode_posting(index, members),
+        reuse_paths,
+    )
+    codebook_oid = reuse_paths.get("index/ivf-flat-v2/codebook.bin") or writer.blob(
+        encode_codebook(index)
+    )
+    sample_oid = reuse_paths.get("index/ivf-flat-v2/sample.bin") or writer.blob(
+        encode_sample(index)
+    )
     ivf_tree = writer.tree(
         [
-            ("100644", "blob", writer.blob(encode_codebook(index)), "codebook.bin"),
-            ("100644", "blob", writer.blob(encode_sample(index)), "sample.bin"),
+            ("100644", "blob", codebook_oid, "codebook.bin"),
+            ("100644", "blob", sample_oid, "sample.bin"),
             ("040000", "tree", postings_tree, "postings"),
         ]
     )
@@ -332,9 +404,10 @@ def write_root(writer: GitWriter, index: PrototypeIndex) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
+    meta_oid = reuse_paths.get("meta.json") or writer.blob(meta)
     return writer.tree(
         [
-            ("100644", "blob", writer.blob(meta), "meta.json"),
+            ("100644", "blob", meta_oid, "meta.json"),
             ("040000", "tree", points_tree, "points"),
             ("040000", "tree", index_tree, "index"),
         ]
@@ -535,6 +608,7 @@ def main() -> None:
     write_us = (time.perf_counter_ns() - write_started) // 1000
     build_us = (time.perf_counter_ns() - started) // 1000
     base_blobs = writer.root_blobs(root)
+    base_paths = writer.root_blob_paths(root)
     base_logical_blob_bytes = sum(writer.blob_sizes[oid] for oid in base_blobs)
     base_loose_repository_bytes = directory_bytes(repository)
 
@@ -545,8 +619,27 @@ def main() -> None:
     mutated_points[:mutation_count, 0] += np.float32(0.001)
     mutation_started = time.perf_counter_ns()
     mutated_index = build_index(ids, mutated_points)
-    mutated_root = write_root(writer, mutated_index)
-    mutation_full_rebuild_us = (time.perf_counter_ns() - mutation_started) // 1000
+    mutation_index_build_us = (time.perf_counter_ns() - mutation_started) // 1000
+    reuse_paths = base_paths.copy()
+    changed_shards = {int(index.shards[row]) for row in range(mutation_count)}
+    for shard in changed_shards:
+        reuse_paths.pop(f"points/vectors/{shard:03x}.f32le", None)
+    if not np.array_equal(index.centroids, mutated_index.centroids):
+        reuse_paths.pop("index/ivf-flat-v2/codebook.bin", None)
+    if encode_sample(index) != encode_sample(mutated_index):
+        reuse_paths.pop("index/ivf-flat-v2/sample.bin", None)
+    for centroid, (before, after) in enumerate(zip(index.postings, mutated_index.postings, strict=True)):
+        if not np.array_equal(before, after):
+            reuse_paths.pop(f"index/ivf-flat-v2/postings/{centroid:04x}.bin", None)
+    mutation_write_started = time.perf_counter_ns()
+    mutated_root = write_root(writer, mutated_index, reuse_paths)
+    mutation_changed_shard_write_us = (time.perf_counter_ns() - mutation_write_started) // 1000
+    mutation_total_us = (time.perf_counter_ns() - mutation_started) // 1000
+    clean_write_started = time.perf_counter_ns()
+    clean_mutated_root = write_root(writer, mutated_index)
+    clean_mutated_write_us = (time.perf_counter_ns() - clean_write_started) // 1000
+    if clean_mutated_root != mutated_root:
+        raise RuntimeError("changed-shard mutation root differs from clean serialization")
     reversed_mutated_index = build_index(ids[::-1].copy(), mutated_points[::-1].copy())
     reversed_mutated_root = write_root(writer, reversed_mutated_index)
     mutated_blobs = writer.root_blobs(mutated_root)
@@ -582,8 +675,13 @@ def main() -> None:
         "training_sample_count": len(index.sample_indices),
         "mutation_1_percent": {
             "points": mutation_count,
-            "full_rebuild_us": mutation_full_rebuild_us,
+            "full_index_build_us": mutation_index_build_us,
+            "changed_shard_write_us": mutation_changed_shard_write_us,
+            "total_us": mutation_total_us,
+            "clean_write_us": clean_mutated_write_us,
             "root": mutated_root,
+            "clean_root": clean_mutated_root,
+            "clean_root_equal": mutated_root == clean_mutated_root,
             "reversed_input_root": reversed_mutated_root,
             "reversed_input_root_equal": mutated_root == reversed_mutated_root,
             "shared_blobs": len(base_blobs & mutated_blobs),
@@ -599,7 +697,7 @@ def main() -> None:
         "filtered": filtered,
         "limitations": [
             "prototype uses NumPy floating-point reductions; cross-platform root equality is a required external gate",
-            "mutation currently measures a canonical full rebuild; incremental changed-shard construction is not implemented",
+            "mutation still recomputes centroid training and assignment globally; only the Git serialization is changed-shard-aware",
             "phase RSS must still be captured externally with /usr/bin/time",
             "historical named-adapter reads are not implemented by this standalone prototype",
             "prototype point codec currently supports the benchmark uint64 ID domain",

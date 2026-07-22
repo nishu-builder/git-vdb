@@ -18,7 +18,8 @@ temporary bare Git repository, then reports the real Git tree ID, logical blob
 bytes, loose repository bytes, object count, reversed-input root equality,
 query timings, ANN recall, and filtered result counts.
 
-The current first-stage prototype deliberately records its missing gates:
-cross-platform floating-point root equality, clean/incremental mutation
-equality, packed and transfer size, concurrency, and phase RSS. Its numbers are
-not production format-v2 claims until those gates are implemented and pass.
+The prototype also exercises concurrency, Git packing and transfer, and a
+changed-shard mutation serializer whose root must equal a clean serialization.
+Its report records remaining gates, including larger workloads, phase RSS, and
+fully incremental centroid/assignment maintenance. Its numbers are not
+production format-v2 claims until those gates are implemented and pass.

@@ -106,32 +106,38 @@ proposed sharded point blobs, deterministic training sample, IVF centroids, and
 postings as real Git blobs and trees. Its first clustered 1,000 x 100 run is
 `target/lancedb-results/format2-prototype-smoke-final.json`.
 
-The prototype root is `3c8a634f8cbe628d86ca0dd9c06ebffd5f189c9c` in three
-independent executions. Reversing the complete input order produces the same
-root. The maintained independent exact oracle agrees at k=1/10/100 with zero
-recorded score error. Approximate recall is 1.000/1.000/0.9675 at k=1/10/100
-and every unfiltered result-count gate passes. Low-selectivity filtered ANN
-still underfills, so those timings are not improvement claims.
+The prototype root is `b18a46d7a404d8ea1ad24fda69b0469d13afcf89` on both
+Apple arm64 and the retained Linux x86_64 box. Reversing the complete input
+order produces the same root on both platforms. The maintained independent
+exact oracle agrees at k=1/10/100 with zero recorded score error. Approximate
+recall is 1.000/1.000/0.9675 at k=1/10/100 and every unfiltered result-count
+gate passes. Low-selectivity filtered ANN still underfills, so those timings
+are not improvement claims.
 
-The base root contains 2,687 unique blobs and 502,241 logical blob bytes; its
-loose repository occupies 651,463 file bytes. The comparable version-1 smoke
-run reports 1,551,757 bytes, so the candidate layout is 58.0% smaller at this
-tier before packing. A 1% vector update followed by a full canonical rebuild
-also has reverse-input root equality and shares 2,676/2,687 blobs and
-483,265/502,241 logical blob bytes with the base root.
+The base root contains 2,687 unique blobs and 534,241 logical blob bytes; its
+loose repository occupies 685,544 file bytes. The comparable version-1 smoke
+run reports 1,551,757 bytes, so the candidate layout is 55.8% smaller at this
+tier before packing. A 1% vector update has reverse-input root equality and
+shares 2,675/2,687 blobs and 475,253/534,241 logical blob bytes with the base
+root.
 
-The observed prototype build was 1.168 seconds, but this is not yet an accepted
-performance claim: it was not interleaved with a same-executable baseline, its
-Git writer is a benchmark subprocess implementation, and its mutation path is a
-0.471-second full rebuild rather than the proposed changed-shard updater. The
-prototype's concurrency 1/4 paths now execute real query batches. External
-measurement reports 60.6 MB peak RSS, versus 35.9 MB for the Rust version-1
-smoke runner, so the prototype does not claim a memory improvement.
+The observed prototype build was 1.060 seconds, but this is not yet an accepted
+performance claim: it was not interleaved with a same-executable baseline and
+its Git writer is a benchmark subprocess implementation. The changed-shard Git
+serializer produces the same `0d635d97abefa21cbfdb96e749859af433f0022d`
+mutation root as a clean serializer and as reversed input on both architectures.
+In one smoke run it wrote the changed root in 112 ms versus 410 ms for a clean
+write; including a 3.7 ms full index recomputation, the mutation took 118 ms.
+The serializer is incremental, but centroid training and point assignment still
+recompute globally. The prototype's concurrency 1/4 paths execute real query
+batches. External measurement reports 60.6 MB peak RSS, versus 35.9 MB for the
+Rust version-1 smoke runner, so the prototype does not claim a memory
+improvement.
 
 Explicit Git maintenance retains a readable base root. At this small tier the
-packed repository is 706,520 bytes, 8.4% larger than its 651,463-byte loose
-form; mirror clone and one-root fetch are 695,559 and 695,485 bytes. Pack headers
+packed repository is 739,528 bytes, 7.9% larger than its 685,544-byte loose
+form; mirror clone and one-root fetch are 728,567 and 728,493 bytes. Pack headers
 and repository metadata dominate the small payload, so this is retained as
 negative evidence rather than extrapolated into a packing win. The prototype
-still needs x86/arm root comparison, 10,000- and 100,000-point runs, and a real
-incremental mutation implementation.
+still needs 10,000- and 100,000-point runs, external phase RSS, and incremental
+centroid/assignment maintenance.
