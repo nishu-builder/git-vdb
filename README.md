@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/git-vdb.svg)](https://crates.io/crates/git-vdb)
-[![docs.rs](https://docs.rs/git-vdb/badge.svg)](https://docs.rs/git-vdb)
+[![docs.rs](https://img.shields.io/docsrs/git-vdb/latest?label=docs.rs)](https://docs.rs/git-vdb/latest/git_vdb/)
 [![MSRV](https://img.shields.io/badge/MSRV-1.87-blue.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
