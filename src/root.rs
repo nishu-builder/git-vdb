@@ -9,7 +9,8 @@ use crate::*;
 use git2::{ObjectType, Oid, Repository, Tree};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::sync::OnceLock;
 
 const FORMAT_VERSION: u32 = 1;
@@ -764,7 +765,7 @@ fn exact_query_points(
     query: Query,
     points: &[Point],
 ) -> Result<QueryResult> {
-    let mut scored = Vec::new();
+    let mut winners = BinaryHeap::with_capacity(query.limit.min(points.len()));
     let mut vectors_scored = 0;
     for point in points {
         if query
@@ -775,14 +776,32 @@ fn exact_query_points(
             continue;
         }
         vectors_scored += 1;
-        scored.push(ScoredPoint {
-            id: point.id.clone(),
-            score: cosine(&query.vector, &point.vector),
-            payload: query.with_payload.then(|| point.payload.clone()),
-            vector: query.with_vector.then(|| point.vector.clone()),
-        });
+        let score = cosine(&query.vector, &point.vector);
+        if query.limit == 0 {
+            continue;
+        }
+        let candidate = ScoredPointRef { point, score };
+        if winners.len() < query.limit {
+            winners.push(candidate);
+        } else if winners
+            .peek()
+            .is_some_and(|worst| candidate.cmp(worst) == Ordering::Less)
+        {
+            winners.pop();
+            winners.push(candidate);
+        }
     }
-    select_and_truncate(&mut scored, query.limit);
+    let mut winners = winners.into_vec();
+    winners.sort_by(ScoredPointRef::cmp);
+    let scored = winners
+        .into_iter()
+        .map(|winner| ScoredPoint {
+            id: winner.point.id.clone(),
+            score: winner.score,
+            payload: query.with_payload.then(|| winner.point.payload.clone()),
+            vector: query.with_vector.then(|| winner.point.vector.clone()),
+        })
+        .collect();
     Ok(QueryResult {
         root: root.into(),
         points: scored,
@@ -905,10 +924,43 @@ fn select_and_truncate(points: &mut Vec<ScoredPoint>, limit: usize) {
 }
 
 fn compare_scored_points(left: &ScoredPoint, right: &ScoredPoint) -> std::cmp::Ordering {
-    right
-        .score
-        .total_cmp(&left.score)
-        .then_with(|| left.id.cmp(&right.id))
+    compare_score_and_id(left.score, &left.id, right.score, &right.id)
+}
+
+fn compare_score_and_id(
+    left_score: f32,
+    left_id: &PointId,
+    right_score: f32,
+    right_id: &PointId,
+) -> Ordering {
+    right_score
+        .total_cmp(&left_score)
+        .then_with(|| left_id.cmp(right_id))
+}
+
+struct ScoredPointRef<'a> {
+    point: &'a Point,
+    score: f32,
+}
+
+impl PartialEq for ScoredPointRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for ScoredPointRef<'_> {}
+
+impl PartialOrd for ScoredPointRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ScoredPointRef<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare_score_and_id(self.score, &self.point.id, other.score, &other.point.id)
+    }
 }
 
 fn cosine(left: &[f32], right: &[f32]) -> f32 {
@@ -1244,6 +1296,80 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn bounded_exact_search_preserves_ties_zero_vectors_and_filters() {
+        let (_temp, _db, collection) = database();
+        collection
+            .upsert(vec![
+                point("b", [1.0, 0.0], "keep"),
+                point("a", [1.0, 0.0], "keep"),
+                point(7_u64, [1.0, 0.0], "drop"),
+                point(8_u64, [0.0, 0.0], "keep"),
+            ])
+            .unwrap();
+        let filtered = collection
+            .query(Query {
+                vector: vec![1.0, 0.0],
+                limit: 2,
+                filter: Some(Filter::must([Condition::matches("topic", "keep")])),
+                params: QueryParams {
+                    exact: Some(true),
+                    ..QueryParams::default()
+                },
+                ..Query::default()
+            })
+            .unwrap();
+        assert_eq!(
+            filtered
+                .points
+                .iter()
+                .map(|point| &point.id)
+                .collect::<Vec<_>>(),
+            vec![&PointId::from("a"), &PointId::from("b")]
+        );
+
+        let zero = collection
+            .query(Query {
+                vector: vec![0.0, 0.0],
+                limit: 10,
+                params: QueryParams {
+                    exact: Some(true),
+                    ..QueryParams::default()
+                },
+                ..Query::default()
+            })
+            .unwrap();
+        let mut expected = vec![
+            PointId::from("a"),
+            PointId::from("b"),
+            PointId::from(7_u64),
+            PointId::from(8_u64),
+        ];
+        expected.sort();
+        assert_eq!(
+            zero.points
+                .iter()
+                .map(|point| point.id.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(zero.points.iter().all(|point| point.score == 0.0));
+
+        let empty = collection
+            .query(Query {
+                vector: vec![1.0, 0.0],
+                limit: 0,
+                params: QueryParams {
+                    exact: Some(true),
+                    ..QueryParams::default()
+                },
+                ..Query::default()
+            })
+            .unwrap();
+        assert!(empty.points.is_empty());
+        assert_eq!(empty.stats.vectors_scored, 4);
     }
 
     fn scored(id: impl Into<PointId>, score: f32) -> ScoredPoint {
