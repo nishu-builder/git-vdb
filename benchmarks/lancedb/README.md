@@ -17,7 +17,8 @@ nix develop -c uv run --frozen --project benchmarks/lancedb \
 
 The same command with `standard.json` runs the explicit 1,000/10,000/100,000
 point by 100/384/768 dimension matrix. `real-glove-25.json` verifies and uses
-the pinned ANN-Benchmarks GloVe-25-angular download. Large profiles are never
+the pinned ANN-Benchmarks GloVe-25-angular download at 100,000 points;
+`real-smoke.json` runs its 10,000-point evidence tier. Large profiles are never
 part of `nix flake check` and must be requested explicitly.
 
 Each repetition starts fresh runner processes and databases. Setup, immutable

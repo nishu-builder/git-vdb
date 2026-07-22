@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "real-smoke",
+  "repetitions": 3,
+  "cases": [
+    {"name": "glove-25-angular-10000", "dataset": "glove_25_angular", "points": 10000, "dimension": 25, "queries": 12}
+  ],
+  "steps": {
+    "k": [1, 10, 100],
+    "mutation_fractions": [0.01, 0.1, 1.0],
+    "filter_selectivities": [0.5, 0.1, 0.01, 0.001],
+    "concurrency": [1]
+  }
+}
