@@ -6,7 +6,7 @@ dependencies = [
   "h5py==3.14.0",
   "lancedb==0.34.0",
   "numpy==2.3.2",
-  "pyarrow==21.0.0",
+  "pyarrow==23.0.1",
 ]
 
 [tool.uv]
