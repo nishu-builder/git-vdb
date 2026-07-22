@@ -7,6 +7,14 @@ continuing to read and write the same canonical format version.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-22
+
+### Changed
+
+- streamlined the README around installation, quick starts, the storage model,
+  and links to the complete rustdoc and specifications;
+- updated the benchmark-only PyArrow dependency from 21.0.0 to 23.0.1.
+
 ## [0.1.0] - 2026-07-22
 
 Initial public release.
@@ -21,5 +29,6 @@ Initial public release.
 - ref-free `SnapshotEngine` and named `Database` / `Collection` APIs;
 - JSON CLI, formal rustdoc API documentation, and format-version-1 specification.
 
-[Unreleased]: https://github.com/nishu-builder/git-vdb/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nishu-builder/git-vdb/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/nishu-builder/git-vdb/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nishu-builder/git-vdb/releases/tag/v0.1.0
