@@ -300,9 +300,9 @@ nix develop -c uv run --frozen --project benchmarks/lancedb \
 Accepted local commits, in order:
 
 - `289a3c2` — pinned differential harness;
+- `a84bb2f` — named-adapter measurements;
 - `64ea328` — lazy exact object decoding;
 - `4969c3b` — immutable snapshot exact cache;
-- `a84bb2f` — named-adapter measurements;
 - `dc5f7e9` — root-keyed named collection cache;
 - `938ac31` — unchanged point-tree reuse;
 - `5b54f67` — changed-path-only canonical tree updates;
