@@ -199,3 +199,33 @@ Exact oracle checks, filtered exact checks, approximate outputs, roots, and all
 tests are green. New focused tests cover a mixed insert/vector/payload/delete-ID/
 delete-filter batch, deletion to an empty root, insertion from empty, full index
 validation, and a delete-then-restore net no-op. Rung 5 is accepted.
+
+## Rung 6 hypothesis: avoid full reads for ID-only batches
+
+After Rung 5, 1% upsert/delete still costs about 0.19 seconds and 100% delete
+has a similar floor. `SnapshotEngine::apply` decodes the complete collection
+before it knows which IDs change. ID-only upsert/delete batches can instead load
+the old point directly from its deterministic hash path on first touch, track
+presence transitions for the metadata count, and feed the same net changes to
+Rung 5's tree updater. Filter deletes still require a full scan and keep the
+existing path.
+
+Expected result: ID-only cost approaches work proportional to touched points;
+filter semantics and mixed filter batches remain unchanged. The returned root
+is still checked against clean rebuilds. A fast-path result does not eagerly
+retain a full decoded snapshot cache; its first later exact query fills that
+cache normally, trading eager memory for lower mutation latency without a
+public semantic change.
+
+### Result: accepted
+
+All five interleaved 1% pairs improved. Median candidate/baseline ratios were
+0.516 for upsert (48.4% reduction) and 0.530 for delete (47.0% reduction).
+All three 10% pairs improved, with median ratios 0.902 for upsert (9.8%
+reduction) and 0.838 for delete (16.2% reduction). The final unchanged harness
+run is `target/lancedb-results/smoke-20260721T235841Z`: p50 is 120.062/100.608
+ms at 1% and 547.794/435.666 ms at 10%.
+
+The clean-root comparisons, full validation, exact oracle, filters, cache
+invalidation, full suite, and Clippy remain green. Filter batches still use the
+full-scan path. Rung 6 is accepted.

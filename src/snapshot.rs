@@ -1,7 +1,7 @@
 use crate::filter::matches_filter;
 use crate::root::{
-    build_root, count_root, get_root, query_root_with_cache, read_meta, read_stored_points,
-    update_root, validate_config, validate_point, validate_root, PointChange,
+    build_root, count_root, get_root, query_root_with_cache, read_meta, read_point_by_id,
+    read_stored_points, update_root, validate_config, validate_point, validate_root, PointChange,
 };
 use crate::{
     CollectionConfig, CountResult, Error, GetRequest, GetResult, ObjectId, Point, PointId, Query,
@@ -120,7 +120,66 @@ impl SnapshotEngine {
         }
         let repo = self.repo()?;
         let previous_root = exact_root(&repo, previous_root.as_ref())?;
-        let config = read_meta(&repo, previous_root)?.config();
+        let meta = read_meta(&repo, previous_root)?;
+        let config = meta.config();
+        if mutations
+            .iter()
+            .all(|mutation| !matches!(mutation, SnapshotMutation::DeleteFilter { .. }))
+        {
+            let mut states = BTreeMap::<PointId, (Option<Point>, Option<Point>)>::new();
+            let mut upsert_ids = BTreeSet::new();
+            for mutation in mutations {
+                match mutation {
+                    SnapshotMutation::Upsert { point } => {
+                        validate_point(&point, &config)?;
+                        let id = point.id.clone();
+                        if !upsert_ids.insert(id.clone()) {
+                            return Err(Error::Invalid(format!(
+                                "snapshot mutation batch contains duplicate upsert ID {}",
+                                id
+                            )));
+                        }
+                        if !states.contains_key(&id) {
+                            let old = read_point_by_id(&repo, previous_root, &id)?;
+                            states.insert(id.clone(), (old.clone(), old));
+                        }
+                        states.get_mut(&id).expect("point state exists").1 = Some(point);
+                    }
+                    SnapshotMutation::DeleteIds { ids } => {
+                        if ids.is_empty() {
+                            return Err(Error::Invalid(
+                                "snapshot delete_ids mutation must not be empty".into(),
+                            ));
+                        }
+                        for id in ids {
+                            if !states.contains_key(&id) {
+                                let old = read_point_by_id(&repo, previous_root, &id)?;
+                                states.insert(id.clone(), (old.clone(), old));
+                            }
+                            states.get_mut(&id).expect("point state exists").1 = None;
+                        }
+                    }
+                    SnapshotMutation::DeleteFilter { .. } => unreachable!(),
+                }
+            }
+            let mut final_point_count = meta.point_count();
+            let changes = states
+                .into_iter()
+                .filter_map(|(id, (old, new))| {
+                    if old == new {
+                        return None;
+                    }
+                    match (old.is_some(), new.is_some()) {
+                        (false, true) => final_point_count += 1,
+                        (true, false) => final_point_count -= 1,
+                        _ => {}
+                    }
+                    Some((id, PointChange { old, new }))
+                })
+                .collect();
+            let root = update_root(&repo, previous_root, &config, final_point_count, &changes)?;
+            return Ok(self.snapshot(root, None));
+        }
         let stored_points = read_stored_points(&repo, previous_root)?;
         let mut points = BTreeMap::new();
         for (id, stored) in stored_points {

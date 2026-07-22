@@ -582,6 +582,33 @@ pub(crate) fn read_all_points(repo: &Repository, root: Oid) -> Result<BTreeMap<P
         .collect())
 }
 
+pub(crate) fn read_point_by_id(
+    repo: &Repository,
+    root: Oid,
+    id: &PointId,
+) -> Result<Option<Point>> {
+    let hash = id_hash(id);
+    let points_oid = root_entry_oid(repo, root, "points")?;
+    let points_tree = repo.find_tree(points_oid)?;
+    let Some(prefix_entry) = points_tree.get_name(&hash[..2]) else {
+        return Ok(None);
+    };
+    ensure_tree_entry(&prefix_entry, "point hash prefix")?;
+    let prefix_tree = repo.find_tree(prefix_entry.id())?;
+    let Some(point_entry) = prefix_tree.get_name(&hash) else {
+        return Ok(None);
+    };
+    ensure_tree_entry(&point_entry, "point")?;
+    let point = read_point_tree(repo, point_entry.id())?;
+    if &point.id != id {
+        return Err(Error::Corrupt(format!(
+            "point ID hash does not match path for {}",
+            point.id
+        )));
+    }
+    Ok(Some(point))
+}
+
 pub(crate) fn read_stored_points(
     repo: &Repository,
     root: Oid,
