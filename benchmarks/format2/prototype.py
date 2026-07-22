@@ -33,7 +33,7 @@ import numpy as np  # noqa: E402
 
 
 SHARD_BITS = 12
-SAMPLE_LIMIT = 1024
+SAMPLE_LIMIT = 8192
 TRAINING_ITERATIONS = 4
 PROBES = 8
 CANDIDATE_LIMIT = 10_000
@@ -583,6 +583,77 @@ def measure_git_storage(writer: GitWriter, root: str) -> dict:
     }
 
 
+def measure_mutation(
+    writer: GitWriter,
+    index: PrototypeIndex,
+    ids: np.ndarray,
+    points: np.ndarray,
+    rows: np.ndarray,
+    base_blobs: set[str],
+    base_paths: dict[str, str],
+) -> dict:
+    mutated_points = points.copy()
+    mutated_points[rows, 0] += np.float32(0.001)
+    mutation_started = time.perf_counter_ns()
+    mutated_index = build_index(ids, mutated_points)
+    index_build_us = (time.perf_counter_ns() - mutation_started) // 1000
+    reuse_paths = base_paths.copy()
+    changed_shards = {int(index.shards[row]) for row in rows}
+    for shard in changed_shards:
+        reuse_paths.pop(f"points/vectors/{shard:03x}.f32le", None)
+    codebook_changed = not np.array_equal(index.centroids, mutated_index.centroids)
+    if codebook_changed:
+        reuse_paths.pop("index/ivf-flat-v2/codebook.bin", None)
+    sample_changed = encode_sample(index) != encode_sample(mutated_index)
+    if sample_changed:
+        reuse_paths.pop("index/ivf-flat-v2/sample.bin", None)
+    changed_postings = 0
+    for centroid, (before, after) in enumerate(
+        zip(index.postings, mutated_index.postings, strict=True)
+    ):
+        if not np.array_equal(before, after):
+            changed_postings += 1
+            reuse_paths.pop(f"index/ivf-flat-v2/postings/{centroid:04x}.bin", None)
+    write_started = time.perf_counter_ns()
+    mutated_root = write_root(writer, mutated_index, reuse_paths)
+    changed_shard_write_us = (time.perf_counter_ns() - write_started) // 1000
+    total_us = (time.perf_counter_ns() - mutation_started) // 1000
+    clean_write_started = time.perf_counter_ns()
+    clean_root = write_root(writer, mutated_index)
+    clean_write_us = (time.perf_counter_ns() - clean_write_started) // 1000
+    if clean_root != mutated_root:
+        raise RuntimeError("changed-shard mutation root differs from clean serialization")
+    reversed_index = build_index(ids[::-1].copy(), mutated_points[::-1].copy())
+    reversed_root = write_root(writer, reversed_index)
+    mutated_blobs = writer.root_blobs(mutated_root)
+    return {
+        "points": len(rows),
+        "sample_changed": sample_changed,
+        "codebook_changed": codebook_changed,
+        "changed_vector_shards": len(changed_shards),
+        "changed_postings": changed_postings,
+        "full_index_build_us": index_build_us,
+        "changed_shard_write_us": changed_shard_write_us,
+        "total_us": total_us,
+        "clean_write_us": clean_write_us,
+        "root": mutated_root,
+        "clean_root": clean_root,
+        "clean_root_equal": mutated_root == clean_root,
+        "reversed_input_root": reversed_root,
+        "reversed_input_root_equal": mutated_root == reversed_root,
+        "shared_blobs": len(base_blobs & mutated_blobs),
+        "base_blobs": len(base_blobs),
+        "mutated_blobs": len(mutated_blobs),
+        "shared_logical_blob_bytes": sum(
+            writer.blob_sizes[oid] for oid in base_blobs & mutated_blobs
+        ),
+        "base_logical_blob_bytes": sum(writer.blob_sizes[oid] for oid in base_blobs),
+        "mutated_logical_blob_bytes": sum(
+            writer.blob_sizes[oid] for oid in mutated_blobs
+        ),
+    }
+
+
 def main() -> None:
     args = parse_args()
     spec = json.loads(args.run_spec.read_text())
@@ -614,35 +685,34 @@ def main() -> None:
 
     reversed_index = build_index(ids[::-1].copy(), points[::-1].copy())
     reversed_root = write_root(writer, reversed_index)
-    mutation_count = max(1, round(len(points) * 0.01))
-    mutated_points = points.copy()
-    mutated_points[:mutation_count, 0] += np.float32(0.001)
-    mutation_started = time.perf_counter_ns()
-    mutated_index = build_index(ids, mutated_points)
-    mutation_index_build_us = (time.perf_counter_ns() - mutation_started) // 1000
-    reuse_paths = base_paths.copy()
-    changed_shards = {int(index.shards[row]) for row in range(mutation_count)}
-    for shard in changed_shards:
-        reuse_paths.pop(f"points/vectors/{shard:03x}.f32le", None)
-    if not np.array_equal(index.centroids, mutated_index.centroids):
-        reuse_paths.pop("index/ivf-flat-v2/codebook.bin", None)
-    if encode_sample(index) != encode_sample(mutated_index):
-        reuse_paths.pop("index/ivf-flat-v2/sample.bin", None)
-    for centroid, (before, after) in enumerate(zip(index.postings, mutated_index.postings, strict=True)):
-        if not np.array_equal(before, after):
-            reuse_paths.pop(f"index/ivf-flat-v2/postings/{centroid:04x}.bin", None)
-    mutation_write_started = time.perf_counter_ns()
-    mutated_root = write_root(writer, mutated_index, reuse_paths)
-    mutation_changed_shard_write_us = (time.perf_counter_ns() - mutation_write_started) // 1000
-    mutation_total_us = (time.perf_counter_ns() - mutation_started) // 1000
-    clean_write_started = time.perf_counter_ns()
-    clean_mutated_root = write_root(writer, mutated_index)
-    clean_mutated_write_us = (time.perf_counter_ns() - clean_write_started) // 1000
-    if clean_mutated_root != mutated_root:
-        raise RuntimeError("changed-shard mutation root differs from clean serialization")
-    reversed_mutated_index = build_index(ids[::-1].copy(), mutated_points[::-1].copy())
-    reversed_mutated_root = write_root(writer, reversed_mutated_index)
-    mutated_blobs = writer.root_blobs(mutated_root)
+    mutations = {}
+    for fraction in (0.01, 0.1, 1.0):
+        count = max(1, round(len(points) * fraction))
+        mutations[str(fraction)] = measure_mutation(
+            writer,
+            index,
+            ids,
+            points,
+            np.arange(count, dtype=np.int64),
+            base_blobs,
+            base_paths,
+        )
+    sample_rows = set(index.sample_indices.tolist())
+    nonsample_rows = np.array(
+        [row for row in range(len(points)) if row not in sample_rows], dtype=np.int64
+    )
+    stable_count = max(1, round(len(points) * 0.01))
+    sample_stable_mutation = None
+    if len(nonsample_rows) >= stable_count:
+        sample_stable_mutation = measure_mutation(
+            writer,
+            index,
+            ids,
+            points,
+            nonsample_rows[:stable_count],
+            base_blobs,
+            base_paths,
+        )
     queries_report = query_metrics(index, queries, spec["k"])
     queries_report["throughput"] = {
         "exact": query_throughput(index, queries, max(spec["k"]), True),
@@ -673,26 +743,8 @@ def main() -> None:
         "centroid_count": len(index.centroids),
         "nonempty_shards": int(len(np.unique(index.shards))),
         "training_sample_count": len(index.sample_indices),
-        "mutation_1_percent": {
-            "points": mutation_count,
-            "full_index_build_us": mutation_index_build_us,
-            "changed_shard_write_us": mutation_changed_shard_write_us,
-            "total_us": mutation_total_us,
-            "clean_write_us": clean_mutated_write_us,
-            "root": mutated_root,
-            "clean_root": clean_mutated_root,
-            "clean_root_equal": mutated_root == clean_mutated_root,
-            "reversed_input_root": reversed_mutated_root,
-            "reversed_input_root_equal": mutated_root == reversed_mutated_root,
-            "shared_blobs": len(base_blobs & mutated_blobs),
-            "base_blobs": len(base_blobs),
-            "mutated_blobs": len(mutated_blobs),
-            "shared_logical_blob_bytes": sum(
-                writer.blob_sizes[oid] for oid in base_blobs & mutated_blobs
-            ),
-            "base_logical_blob_bytes": sum(writer.blob_sizes[oid] for oid in base_blobs),
-            "mutated_logical_blob_bytes": sum(writer.blob_sizes[oid] for oid in mutated_blobs),
-        },
+        "mutations": mutations,
+        "sample_stable_mutation_1_percent": sample_stable_mutation,
         "queries": queries_report,
         "filtered": filtered,
         "limitations": [
