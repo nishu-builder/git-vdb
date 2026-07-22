@@ -32,6 +32,31 @@ spent in Git bucket traversal versus candidate point decoding and scoring.
 Loose-object and packed measurements use the same retained root so logical data
 and query results cannot drift between conditions.
 
+### A1 initial result
+
+The retained Linux artifacts are under
+`/home/ubuntu/git-vdb-performance/a1` on `nishadsingh-box-4`. The retained root
+is `2a00e66b7976398bbf70daf9c9ff9c20dfc7d90f`, built from the exact pinned
+100,000-point input. Its measured build time was 53.303 seconds, logical loose
+bytes were 118,609,107, build peak RSS was 311,028 KiB, and `/usr/bin/time`
+reported 2,855,688 filesystem-output blocks while creating the loose database.
+
+Targeted Linux `perf` samples begin after the unmeasured warmup. In the exact
+batch, 46.4% of sampled CPU was under `cosine` and 41.3% under the full stable
+`sort_and_truncate`; this directly supports A2. The unchanged exact batch p50
+was 32.528 ms in the profiling run and its process peak was 1,049,172 KiB. The
+peak includes filling the immutable point cache before samples begin and is much
+smaller than the full harness's combined multi-phase peak.
+
+The unchanged approximate batch p50 was 213.784 ms, with 10,000 vectors scored
+at the median and process peak RSS of 95,024 KiB. Of sampled approximate CPU,
+86.7% was under `read_point_parts`, including 53.0% under `read_named_blob`;
+bucket discovery under `find_bucket` was only 2.2%. Libgit2 `git_odb_read`
+dominates the point-tree and blob stacks. This supports A4's first two steps:
+reuse root-keyed decoded points before considering a complete in-memory postings
+index. Logical ODB counts/bytes, mutation attribution, and pack/transfer effects
+remain assigned to A5/A6 rather than being inferred from CPU percentages.
+
 ## A2 hypothesis: exact top-k work reduction
 
 At the baseline, warm exact search constructs and clones one `ScoredPoint` per
@@ -44,3 +69,31 @@ score, order, memory-lifetime, approximate-search, or public API change.
 
 Norm hoisting/caching remains a separate later candidate because arithmetic
 reuse and top-k work reduction must not be combined before either is measured.
+
+### A2 result: accepted pending full-protocol graduation
+
+The first candidate uses `select_nth_unstable_by` with the complete score/typed-ID
+ordering, truncates to k, and stably orders only the selected k. Scoring and
+construction of all candidates remain unchanged, so this rung isolates sorting
+complexity. A focused unit test compares the selection with the old full sort at
+every limit across equal scores, signed zero, string IDs, and unsigned IDs.
+
+Five interleaved baseline/candidate pairs used separate release-with-debug-info
+executables and the same retained root. Results and vectors-scored arrays were
+identical after timing fields were removed.
+
+| Pair | Baseline batch | Candidate batch | Candidate / baseline | Baseline p50 | Candidate p50 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 3.261 s | 2.061 s | 0.632 | 32.403 ms | 20.466 ms |
+| 2 | 3.197 s | 2.039 s | 0.638 | 31.771 ms | 20.303 ms |
+| 3 | 3.196 s | 2.091 s | 0.654 | 31.724 ms | 20.758 ms |
+| 4 | 3.189 s | 2.064 s | 0.647 | 31.684 ms | 20.558 ms |
+| 5 | 3.165 s | 2.040 s | 0.645 | 31.495 ms | 20.518 ms |
+
+Every pair improved by 34.6% to 36.8%, far beyond the 5% materiality threshold.
+Peak RSS fell slightly from about 1,049,270 KiB to 1,045,721 KiB. The unchanged
+differential smoke run at `target/lancedb-results/smoke-20260722T035008Z` keeps
+the exact oracle green at k=1/10/100 for both synthetic distributions and every
+filter selectivity; its maximum `git-vdb` score error remains below `2.98e-8`.
+No approximate code changed. Final acceptance requires the full repository gate
+and the pinned five-repetition 100,000-point protocol at the candidate revision.

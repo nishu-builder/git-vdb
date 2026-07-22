@@ -742,7 +742,7 @@ fn exact_query(repo: &Repository, root: Oid, meta: &RootMeta, query: Query) -> R
             vector: query.with_vector.then_some(vector),
         });
     }
-    sort_and_truncate(&mut scored, query.limit);
+    select_and_truncate(&mut scored, query.limit);
     Ok(QueryResult {
         root: root.into(),
         points: scored,
@@ -782,7 +782,7 @@ fn exact_query_points(
             vector: query.with_vector.then(|| point.vector.clone()),
         });
     }
-    sort_and_truncate(&mut scored, query.limit);
+    select_and_truncate(&mut scored, query.limit);
     Ok(QueryResult {
         root: root.into(),
         points: scored,
@@ -888,13 +888,27 @@ fn approximate_query(
 }
 
 fn sort_and_truncate(points: &mut Vec<ScoredPoint>, limit: usize) {
-    points.sort_by(|left, right| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    points.sort_by(compare_scored_points);
     points.truncate(limit);
+}
+
+fn select_and_truncate(points: &mut Vec<ScoredPoint>, limit: usize) {
+    if limit == 0 {
+        points.clear();
+        return;
+    }
+    if points.len() > limit {
+        points.select_nth_unstable_by(limit, compare_scored_points);
+        points.truncate(limit);
+    }
+    points.sort_by(compare_scored_points);
+}
+
+fn compare_scored_points(left: &ScoredPoint, right: &ScoredPoint) -> std::cmp::Ordering {
+    right
+        .score
+        .total_cmp(&left.score)
+        .then_with(|| left.id.cmp(&right.id))
 }
 
 fn cosine(left: &[f32], right: &[f32]) -> f32 {
@@ -1198,6 +1212,47 @@ mod tests {
         assert_eq!(result.points[0].score, 1.0);
         assert_eq!(collection.count(None).unwrap().count, 3);
         assert!(collection.validate(true).unwrap().valid);
+    }
+
+    #[test]
+    fn exact_top_k_selection_matches_full_sort_for_ties_and_typed_ids() {
+        let points = vec![
+            scored("b", 1.0),
+            scored("a", 1.0),
+            scored(7_u64, 1.0),
+            scored("zero", 0.0),
+            scored(8_u64, -0.0),
+            scored("low", -1.0),
+        ];
+        for limit in 0..=points.len() + 1 {
+            let mut expected = points.clone();
+            sort_and_truncate(&mut expected, limit);
+            let mut actual = points.clone();
+            select_and_truncate(&mut actual, limit);
+            assert_eq!(
+                actual.iter().map(|point| &point.id).collect::<Vec<_>>(),
+                expected.iter().map(|point| &point.id).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|point| point.score.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|point| point.score.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    fn scored(id: impl Into<PointId>, score: f32) -> ScoredPoint {
+        ScoredPoint {
+            id: id.into(),
+            score,
+            payload: None,
+            vector: None,
+        }
     }
 
     #[test]
