@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import lancedb
@@ -85,6 +86,32 @@ def query_all(table, queries: np.ndarray, limit: int, exact: bool, predicate=Non
     return durations, results
 
 
+def query_throughput(table, queries, limit, exact, concurrencies):
+    measurements = {}
+    for workers in concurrencies:
+        started = time.perf_counter_ns()
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    query_all,
+                    table,
+                    queries[worker::workers],
+                    limit,
+                    exact,
+                )
+                for worker in range(workers)
+            ]
+            for future in futures:
+                future.result()
+        wall_us = elapsed_us(started)
+        measurements[str(workers)] = {
+            "queries": len(queries),
+            "wall_us": wall_us,
+            "queries_per_second": len(queries) * 1_000_000.0 / wall_us,
+        }
+    return measurements
+
+
 def directory_bytes(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
@@ -124,6 +151,14 @@ def main() -> None:
         approximate_query_us, approximate_results = query_all(
             table, queries, maximum_k, False
         )
+        throughput = {
+            "exact": query_throughput(
+                table, queries, maximum_k, True, spec["concurrency"]
+            ),
+            "approximate": query_throughput(
+                table, queries, maximum_k, False, spec["concurrency"]
+            ),
+        }
 
         filtered = {}
         for selectivity in spec["filter_selectivities"]:
@@ -188,6 +223,7 @@ def main() -> None:
             "approximate_query_us": approximate_query_us,
             "exact_results": exact_results,
             "approximate_results": approximate_results,
+            "throughput": throughput,
             "filtered": filtered,
             "mutations": mutations,
             "on_disk_bytes": baseline_on_disk_bytes,

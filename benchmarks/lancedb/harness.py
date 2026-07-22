@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -117,13 +118,26 @@ def command_output(*args: str) -> str:
     return subprocess.run(args, cwd=ROOT, check=True, text=True, capture_output=True).stdout.strip()
 
 
+def cpu_description() -> str:
+    cpu = platform.processor()
+    if cpu:
+        return cpu
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        for line in cpuinfo.read_text().splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip() in {"model name", "Hardware"}:
+                return value.strip()
+    return "unknown"
+
+
 def metadata(workload_path: Path, workload: dict) -> dict:
     memory = None
     if platform.system() == "Darwin":
         memory = int(command_output("sysctl", "-n", "hw.memsize"))
         cpu = command_output("sysctl", "-n", "machdep.cpu.brand_string")
     else:
-        cpu = platform.processor()
+        cpu = cpu_description()
         try:
             memory = int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
         except (ValueError, OSError):
@@ -139,6 +153,7 @@ def metadata(workload_path: Path, workload: dict) -> dict:
         "os": platform.platform(),
         "architecture": platform.machine(),
         "cpu": cpu,
+        "logical_cpu_count": os.cpu_count(),
         "memory_bytes": memory,
         "rustc": command_output("rustc", "--version", "--verbose"),
         "python": sys.version,
@@ -155,15 +170,34 @@ def validate_workload(workload: dict) -> None:
     required_steps = {"k", "mutation_fractions", "filter_selectivities", "concurrency"}
     if set(workload.get("steps", {})) != required_steps:
         raise ValueError(f"steps must contain exactly {sorted(required_steps)}")
+    if not workload["steps"]["concurrency"] or any(
+        value < 1 for value in workload["steps"]["concurrency"]
+    ):
+        raise ValueError("concurrency values must be positive")
 
 
-def run_command(command: list[str], stderr_path: Path) -> None:
-    completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+def run_command(command: list[str], stderr_path: Path) -> int:
+    timer = Path("/usr/bin/time")
+    timed_command = command
+    if timer.exists():
+        timed_command = [str(timer), "-l" if platform.system() == "Darwin" else "-v", *command]
+    completed = subprocess.run(timed_command, cwd=ROOT, text=True, capture_output=True)
     stderr_path.write_text(completed.stderr)
     if completed.returncode:
         raise subprocess.CalledProcessError(
             completed.returncode, command, completed.stdout, completed.stderr
         )
+    if platform.system() == "Darwin":
+        match = re.search(r"^\s*(\d+)\s+maximum resident set size$", completed.stderr, re.MULTILINE)
+        multiplier = 1
+    else:
+        match = re.search(
+            r"Maximum resident set size \(kbytes\):\s*(\d+)", completed.stderr
+        )
+        multiplier = 1024
+    if not match:
+        raise RuntimeError("unable to parse peak RSS from /usr/bin/time output")
+    return int(match.group(1)) * multiplier
 
 
 def oracle(points: np.ndarray, query: np.ndarray, limit: int, selectivity=None):
@@ -234,6 +268,42 @@ def percentiles(samples: list[int]) -> dict:
     }
 
 
+def rate_percentiles(samples: list[float]) -> dict:
+    return {
+        "p50_qps": float(np.percentile(samples, 50)),
+        "p95_qps": float(np.percentile(samples, 95)),
+        "p99_qps": float(np.percentile(samples, 99)),
+    }
+
+
+def byte_percentiles(samples: list[int]) -> dict:
+    return {
+        "p50_bytes": float(np.percentile(samples, 50)),
+        "p95_bytes": float(np.percentile(samples, 95)),
+        "p99_bytes": float(np.percentile(samples, 99)),
+    }
+
+
+def summarize_throughput(records: list[dict], concurrencies: list[int]) -> dict:
+    return {
+        mode: {
+            str(concurrency): {
+                "wall": percentiles(
+                    [record["throughput"][mode][str(concurrency)]["wall_us"] for record in records]
+                ),
+                "queries_per_second": rate_percentiles(
+                    [
+                        record["throughput"][mode][str(concurrency)]["queries_per_second"]
+                        for record in records
+                    ]
+                ),
+            }
+            for concurrency in concurrencies
+        }
+        for mode in ("exact", "approximate")
+    }
+
+
 def summarize(case: dict, points, queries, git_reports, lance_reports, steps):
     summary = {"case": case, "engines": {}}
     for engine, reports in (("git-vdb", git_reports), ("lancedb", lance_reports)):
@@ -260,6 +330,11 @@ def summarize(case: dict, points, queries, git_reports, lance_reports, steps):
             "bytes_per_point": float(np.median(disk) / case["points"]),
             "exact_correctness": assess_results(points, queries, exact_results, steps["k"]),
             "approximate": recall(points, queries, approximate_results, steps["k"]),
+            "throughput": summarize_throughput(
+                cores if engine == "git-vdb" else reports,
+                steps["concurrency"],
+            ),
+            "peak_rss": byte_percentiles([report["peak_rss_bytes"] for report in reports]),
             "filtered": {},
             "mutations": {},
         }
@@ -282,6 +357,7 @@ def summarize(case: dict, points, queries, git_reports, lance_reports, steps):
                 "approximate": recall(
                     points, queries, adapters[0]["approximate_results"], steps["k"]
                 ),
+                "throughput": summarize_throughput(adapters, steps["concurrency"]),
             }
         for selectivity in steps["filter_selectivities"]:
             filtered = (
@@ -376,17 +452,23 @@ def main() -> None:
         lance_reports = []
         for repetition in range(workload["repetitions"]):
             git_output = case_dir / f"git-vdb-{repetition}.json"
-            run_command(
+            git_peak_rss = run_command(
                 [str(rust_runner), str(spec_path), str(git_output)],
                 case_dir / f"git-vdb-{repetition}.stderr",
             )
-            git_reports.append(json.loads(git_output.read_text()))
+            git_report = json.loads(git_output.read_text())
+            git_report["peak_rss_bytes"] = git_peak_rss
+            git_output.write_text(json.dumps(git_report, indent=2, sort_keys=True))
+            git_reports.append(git_report)
             lance_output = case_dir / f"lancedb-{repetition}.json"
-            run_command(
+            lance_peak_rss = run_command(
                 [sys.executable, str(ROOT / "benchmarks/lancedb/lancedb_runner.py"), str(spec_path), str(lance_output)],
                 case_dir / f"lancedb-{repetition}.stderr",
             )
-            lance_reports.append(json.loads(lance_output.read_text()))
+            lance_report = json.loads(lance_output.read_text())
+            lance_report["peak_rss_bytes"] = lance_peak_rss
+            lance_output.write_text(json.dumps(lance_report, indent=2, sort_keys=True))
+            lance_reports.append(lance_report)
         points = np.fromfile(points_path, dtype="<f4").reshape(case["points"], case["dimension"])
         queries = np.fromfile(queries_path, dtype="<f4").reshape(case["queries"], case["dimension"])
         summaries.append(summarize(case, points, queries, git_reports, lance_reports, workload["steps"]))

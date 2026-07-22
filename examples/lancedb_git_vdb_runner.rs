@@ -7,6 +7,7 @@ use serde_json::{json, Map, Value};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::Instant;
 
 #[derive(Deserialize)]
@@ -21,6 +22,7 @@ struct RunSpec {
     k: Vec<usize>,
     mutation_fractions: Vec<f64>,
     filter_selectivities: Vec<f64>,
+    concurrency: Vec<usize>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -56,6 +58,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         query_all(&snapshot, &queries, maximum_k, true, None)?;
     let (approximate_query_us, approximate_results, approximate_vectors_scored) =
         query_all(&snapshot, &queries, maximum_k, false, None)?;
+    let snapshot_throughput = json!({
+        "exact": query_snapshot_throughput(
+            &snapshot,
+            &queries,
+            maximum_k,
+            true,
+            &spec.concurrency,
+        )?,
+        "approximate": query_snapshot_throughput(
+            &snapshot,
+            &queries,
+            maximum_k,
+            false,
+            &spec.concurrency,
+        )?,
+    });
 
     let mut filtered = Map::new();
     for selectivity in &spec.filter_selectivities {
@@ -127,6 +145,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         adapter_approximate_results,
         adapter_approximate_vectors_scored,
     ) = query_collection_all(&collection, &queries, maximum_k, false, None)?;
+    let adapter_throughput = json!({
+        "exact": query_collection_throughput(
+            &collection,
+            &queries,
+            maximum_k,
+            true,
+            &spec.concurrency,
+        )?,
+        "approximate": query_collection_throughput(
+            &collection,
+            &queries,
+            maximum_k,
+            false,
+            &spec.concurrency,
+        )?,
+    });
     let historical_started = Instant::now();
     let historical = collection.at(&adapter_root)?;
     let historical_count = historical.count(None)?.count;
@@ -150,6 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "approximate_results": approximate_results,
             "exact_vectors_scored": exact_vectors_scored,
             "approximate_vectors_scored": approximate_vectors_scored,
+            "throughput": snapshot_throughput,
             "filtered": filtered,
             "mutations": mutations,
             "on_disk_bytes": baseline_on_disk_bytes,
@@ -163,6 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "approximate_results": adapter_approximate_results,
             "exact_vectors_scored": adapter_exact_vectors_scored,
             "approximate_vectors_scored": adapter_approximate_vectors_scored,
+            "throughput": adapter_throughput,
             "historical_read_us": historical_read_us,
             "historical_count": historical_count,
             "on_disk_bytes": directory_bytes(adapter_dir.path())?,
@@ -286,6 +322,120 @@ fn query_collection_all(
         ));
     }
     Ok((durations, results, vectors_scored))
+}
+
+fn query_snapshot_throughput(
+    snapshot: &git_vdb::Snapshot,
+    queries: &[Vec<f32>],
+    limit: usize,
+    exact: bool,
+    concurrencies: &[usize],
+) -> git_vdb::Result<Map<String, Value>> {
+    let mut measurements = Map::new();
+    for &workers in concurrencies {
+        if workers == 0 {
+            return Err(git_vdb::Error::Invalid(
+                "benchmark concurrency must be positive".into(),
+            ));
+        }
+        let started = Instant::now();
+        let outcome: git_vdb::Result<()> = thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(workers);
+            for worker in 0..workers {
+                let snapshot = snapshot.clone();
+                handles.push(scope.spawn(move || -> git_vdb::Result<()> {
+                    for vector in queries.iter().skip(worker).step_by(workers) {
+                        snapshot.query(Query {
+                            vector: vector.clone(),
+                            limit,
+                            params: QueryParams {
+                                exact: Some(exact),
+                                ..QueryParams::default()
+                            },
+                            ..Query::default()
+                        })?;
+                    }
+                    Ok(())
+                }));
+            }
+            join_query_workers(handles)
+        });
+        outcome?;
+        measurements.insert(
+            workers.to_string(),
+            throughput_measurement(queries.len(), micros(started)),
+        );
+    }
+    Ok(measurements)
+}
+
+fn query_collection_throughput(
+    collection: &git_vdb::Collection,
+    queries: &[Vec<f32>],
+    limit: usize,
+    exact: bool,
+    concurrencies: &[usize],
+) -> git_vdb::Result<Map<String, Value>> {
+    let mut measurements = Map::new();
+    for &workers in concurrencies {
+        if workers == 0 {
+            return Err(git_vdb::Error::Invalid(
+                "benchmark concurrency must be positive".into(),
+            ));
+        }
+        let started = Instant::now();
+        let outcome: git_vdb::Result<()> = thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(workers);
+            for worker in 0..workers {
+                let collection = collection.clone();
+                handles.push(scope.spawn(move || -> git_vdb::Result<()> {
+                    for vector in queries.iter().skip(worker).step_by(workers) {
+                        collection.query(Query {
+                            vector: vector.clone(),
+                            limit,
+                            params: QueryParams {
+                                exact: Some(exact),
+                                ..QueryParams::default()
+                            },
+                            ..Query::default()
+                        })?;
+                    }
+                    Ok(())
+                }));
+            }
+            join_query_workers(handles)
+        });
+        outcome?;
+        measurements.insert(
+            workers.to_string(),
+            throughput_measurement(queries.len(), micros(started)),
+        );
+    }
+    Ok(measurements)
+}
+
+fn join_query_workers(
+    handles: Vec<thread::ScopedJoinHandle<'_, git_vdb::Result<()>>>,
+) -> git_vdb::Result<()> {
+    for handle in handles {
+        match handle.join() {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(git_vdb::Error::Invalid(
+                    "benchmark query worker panicked".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn throughput_measurement(queries: usize, wall_us: u64) -> Value {
+    json!({
+        "queries": queries,
+        "wall_us": wall_us,
+        "queries_per_second": queries as f64 * 1_000_000.0 / wall_us as f64,
+    })
 }
 
 fn selectivity_filter(selectivity: f64) -> Filter {
