@@ -464,6 +464,52 @@ def directory_bytes(path: Path) -> int:
     return sum(entry.stat().st_size for entry in path.rglob("*") if entry.is_file())
 
 
+def measure_git_storage(writer: GitWriter, root: str) -> dict:
+    writer.command("update-ref", "refs/bench/base", root)
+    started = time.perf_counter_ns()
+    writer.command("gc", "--prune=now")
+    pack_us = (time.perf_counter_ns() - started) // 1000
+    if writer.command("cat-file", "-t", root) != "tree":
+        raise RuntimeError("base root is unreadable after packing")
+    packed_bytes = directory_bytes(writer.path)
+    source = writer.path.resolve().as_uri()
+    with tempfile.TemporaryDirectory(prefix="git-vdb-format2-clone-") as directory:
+        clone = Path(directory) / "mirror.git"
+        started = time.perf_counter_ns()
+        subprocess.run(
+            ["git", "clone", "--mirror", source, str(clone)],
+            check=True,
+            capture_output=True,
+        )
+        clone_us = (time.perf_counter_ns() - started) // 1000
+        clone_bytes = directory_bytes(clone)
+    with tempfile.TemporaryDirectory(prefix="git-vdb-format2-fetch-") as directory:
+        fetched = Path(directory) / "one-root.git"
+        subprocess.run(["git", "init", "--bare", str(fetched)], check=True, capture_output=True)
+        started = time.perf_counter_ns()
+        subprocess.run(
+            [
+                "git",
+                f"--git-dir={fetched}",
+                "fetch",
+                source,
+                "refs/bench/base:refs/bench/base",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        fetch_us = (time.perf_counter_ns() - started) // 1000
+        fetch_bytes = directory_bytes(fetched)
+    return {
+        "pack_us": pack_us,
+        "packed_repository_bytes": packed_bytes,
+        "mirror_clone_us": clone_us,
+        "mirror_clone_bytes": clone_bytes,
+        "one_root_fetch_us": fetch_us,
+        "one_root_fetch_bytes": fetch_bytes,
+    }
+
+
 def main() -> None:
     args = parse_args()
     spec = json.loads(args.run_spec.read_text())
@@ -513,6 +559,8 @@ def main() -> None:
         str(selectivity): filtered_metrics(index, queries, spec["k"], selectivity)
         for selectivity in spec["filter_selectivities"]
     }
+    repository_bytes_after_checks = directory_bytes(repository)
+    storage = measure_git_storage(writer, root)
     report = {
         "schema_version": 1,
         "prototype_format_version": 2,
@@ -525,7 +573,8 @@ def main() -> None:
         "logical_blob_bytes": base_logical_blob_bytes,
         "unique_blobs": len(base_blobs),
         "loose_repository_bytes": base_loose_repository_bytes,
-        "repository_bytes_after_determinism_and_mutation_checks": directory_bytes(repository),
+        "repository_bytes_after_determinism_and_mutation_checks": repository_bytes_after_checks,
+        "git_storage": storage,
         "point_count": len(points),
         "dimension": points.shape[1],
         "centroid_count": len(index.centroids),
@@ -551,7 +600,8 @@ def main() -> None:
         "limitations": [
             "prototype uses NumPy floating-point reductions; cross-platform root equality is a required external gate",
             "mutation currently measures a canonical full rebuild; incremental changed-shard construction is not implemented",
-            "packing, transfer, concurrency, and phase RSS are not yet measured by this command",
+            "phase RSS must still be captured externally with /usr/bin/time",
+            "historical named-adapter reads are not implemented by this standalone prototype",
             "prototype point codec currently supports the benchmark uint64 ID domain",
         ],
     }
