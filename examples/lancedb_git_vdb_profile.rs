@@ -4,6 +4,8 @@ use serde_json::{json, Map};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Deserialize)]
@@ -90,6 +92,7 @@ fn query(
     // Fill the immutable snapshot cache or warm the approximate ODB path without
     // including that one-time work in the samples.
     snapshot.query(make_query(&queries[0], maximum_k, exact))?;
+    wait_for_profiler()?;
 
     let mut query_us = Vec::with_capacity(queries.len());
     let mut results = Vec::with_capacity(queries.len());
@@ -115,6 +118,19 @@ fn query(
             "results": results,
         }))?,
     )?;
+    Ok(())
+}
+
+fn wait_for_profiler() -> Result<(), Box<dyn std::error::Error>> {
+    let Ok(ready_path) = env::var("GIT_VDB_PROFILE_READY") else {
+        return Ok(());
+    };
+    let go_path = env::var("GIT_VDB_PROFILE_GO")
+        .map_err(|_| "GIT_VDB_PROFILE_GO is required when profiler waiting is enabled")?;
+    fs::write(ready_path, std::process::id().to_string())?;
+    while !Path::new(&go_path).exists() {
+        thread::sleep(Duration::from_millis(10));
+    }
     Ok(())
 }
 
