@@ -229,3 +229,87 @@ ms at 1% and 547.794/435.666 ms at 10%.
 The clean-root comparisons, full validation, exact oracle, filters, cache
 invalidation, full suite, and Clippy remain green. Filter batches still use the
 full-scan path. Rung 6 is accepted.
+
+## Pinned real-data baseline
+
+`real-smoke.json` ran three cold repetitions over the first 10,000 train vectors
+and 12 test vectors from the checksum-pinned ANN-Benchmarks GloVe-25-angular
+file. Raw output is
+`target/lancedb-results/real-smoke-20260722T000038Z`.
+
+| Metric | git-vdb snapshot core | LanceDB 0.34.0 |
+|---|---:|---:|
+| Build p50 | 25.429 s | 0.124 s |
+| Exact query p50 | 0.733 ms | 1.436 ms |
+| Approximate query p50 | 102.140 ms | 1.038 ms |
+| Approximate recall@1 | 0.917 | 1.000 |
+| Approximate recall@10 | 0.817 | 0.867 |
+| Approximate recall@100 | 0.600 | 0.705 |
+| On-disk bytes/point | 1,299.9 | 206.6 |
+| 1% upsert p50 | 0.969 s | 0.019 s |
+| 1% delete p50 | 0.800 s | 0.003 s |
+
+Both exact engines agree with the independent oracle at k=1/10/100. Maximum
+score error is `2.98e-8` for git-vdb and `1.95e-7` for LanceDB. The git-vdb
+named adapter exact p50 is 0.792 ms and resolves the collection ref on every
+query. git-vdb therefore wins this warm exact latency tier while retaining
+deterministic roots and Git history semantics that LanceDB does not provide.
+LanceDB wins build, mutation, storage, and approximate search decisively.
+
+At 0.1% filter selectivity, both approximate configurations fail result-count
+and recall gates. git-vdb also fails k=100 result count at 10% selectivity and
+both fail it at 1%. These approximate timings are reported as negative evidence,
+not accepted performance. Version 1 random-hyperplane LSH remains provisional.
+
+## Stop condition and next rung
+
+The reproducible harness, synthetic smoke baseline, pinned-real baseline, exact
+correctness gates, and six accepted improvement rungs are complete. The current
+small safe frontier has been exhausted: exact query now scores cached points in
+memory, and ID mutation work is proportional to directly loaded IDs and changed
+Git tree paths. Remaining profiles point to fundamental version-1 costs:
+12 canonical LSH entries per point, loose Git object creation/tree validation,
+and an ANN recall frontier that cannot be fixed by timing-only patches.
+
+The 100,000-point full protocol is not accepted evidence yet. This machine has
+about 11 GiB free, and the protocol's independent 100% mutation databases plus
+raw runs do not leave safe storage headroom at ten times the real-smoke tier.
+Proceeding requires additional scratch storage/hardware or a narrower user-
+approved protocol. A material ANN improvement requires a reviewed format-2
+design; it must not silently change format version 1.
+
+The highest-leverage next rung is a version-2 proposal for a deterministic,
+history-independent IVF-flat layout, evaluated first on the pinned 100,000-point
+real dataset. For version 1, the next observability rung is ODB-level object/
+byte read instrumentation plus packed-repository and clone/fetch transfer
+measurements; the current harness reports vectors scored, loose disk bytes, and
+logical structural reuse but does not claim those missing counters.
+
+## Reproduction and accepted commits
+
+```sh
+nix flake check --print-build-logs
+nix develop -c uv run --frozen --project benchmarks/lancedb \
+  python benchmarks/lancedb/harness.py \
+  --workload benchmarks/lancedb/workloads/smoke.json
+nix develop -c uv run --frozen --project benchmarks/lancedb \
+  python benchmarks/lancedb/harness.py \
+  --workload benchmarks/lancedb/workloads/real-smoke.json
+```
+
+Accepted local commits, in order:
+
+- `289a3c2` — pinned differential harness;
+- `64ea328` — lazy exact object decoding;
+- `4969c3b` — immutable snapshot exact cache;
+- `a84bb2f` — named-adapter measurements;
+- `dc5f7e9` — root-keyed named collection cache;
+- `938ac31` — unchanged point-tree reuse;
+- `5b54f67` — changed-path-only canonical tree updates;
+- `e1d2809` — touched-ID-only mutation reads;
+- `b5781e2` — pinned real-data smoke workload.
+
+Rejected or invalid evidence retained in this log: non-interleaved whole-run
+comparisons whose unrelated build/approximate variance exceeded 5%, and the
+first named-cache representation whose 5.2% RSS increase crossed the material
+threshold. No test or workload was weakened to obtain an accepted result.

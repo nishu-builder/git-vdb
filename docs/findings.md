@@ -13,6 +13,12 @@ centroid assignment, introduced only as a new format version.
 
 ## Reproducible harness
 
+The maintained LanceDB differential harness and current accepted evidence are
+documented in `benchmarks/lancedb/README.md` and
+`docs/benchmarks/lancedb-climb.md`. It pins LanceDB 0.34.0 and dependencies,
+includes synthetic uniform/clustered and checksum-pinned GloVe-25-angular data,
+and supersedes the older single-engine example below for comparison claims.
+
 `examples/benchmark.rs` generates deterministic clustered data with seed
 `0x676974766462626d`, builds a temporary bare repository, compares approximate
 results to the exact oracle, and emits JSON containing recall, scored fractions,
