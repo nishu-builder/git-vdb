@@ -29,7 +29,20 @@
 
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
-        src = craneLib.cleanCargoSource ./.;
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter =
+            path: type:
+            let
+              relativePath = pkgs.lib.removePrefix (toString ./.) (toString path);
+            in
+            craneLib.filterCargoSources path type
+            || builtins.elem relativePath [
+              "/docs"
+              "/docs/format.md"
+              "/docs/snapshots.md"
+            ];
+        };
 
         commonArgs = {
           inherit src;

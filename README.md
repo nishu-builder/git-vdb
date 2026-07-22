@@ -1,9 +1,20 @@
 # git-vdb
 
 [![CI](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/git-vdb.svg)](https://crates.io/crates/git-vdb)
+[![docs.rs](https://docs.rs/git-vdb/badge.svg)](https://docs.rs/git-vdb)
+[![MSRV](https://img.shields.io/badge/MSRV-1.87-blue.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **A vector database stored in a Git repository.**
+
+API documentation is available on [docs.rs](https://docs.rs/git-vdb). Add the
+library to a Rust project or install the CLI with Cargo:
+
+```sh
+cargo add git-vdb
+cargo install git-vdb
+```
 
 A Git repository holds the database state. When you use the CLI or the
 `Database` / `Collection` API:
@@ -163,34 +174,16 @@ use git_vdb::{CollectionConfig, Point, Query, Snapshot, SnapshotEngine,
 # fn main() -> git_vdb::Result<()> {
 let engine = SnapshotEngine::ephemeral()?;
 let first = engine.build(
-    CollectionConfig {
-        dimension: 2,
-        ..CollectionConfig::default()
-    },
-    vec![Point {
-        id: "one".into(),
-        vector: vec![1.0, 0.0],
-        payload: Default::default(),
-    }],
+    CollectionConfig::new(2),
+    vec![Point::new("one", [1.0, 0.0])],
 )?;
 
 let next = engine.apply(
     first.root(),
-    vec![SnapshotMutation::upsert(Point {
-        id: "two".into(),
-        vector: vec![0.8, 0.2],
-        payload: Default::default(),
-    })],
+    vec![SnapshotMutation::upsert(Point::new("two", [0.8, 0.2]))],
 )?;
 
-let result = engine.query(
-    next.root(),
-    Query {
-        vector: vec![1.0, 0.0],
-        limit: 2,
-        ..Query::default()
-    },
-)?;
+let result = engine.query(next.root(), Query::exact([1.0, 0.0], 2))?;
 
 next.materialize("./snapshot")?;
 let reopened = Snapshot::open_directory("./snapshot")?;
@@ -214,9 +207,10 @@ Filters support scalar `match`, numeric `range`, `has_id`, nested groups, and
 `must` / `should` / `must_not`. Dot-separated field paths traverse nested JSON
 objects.
 
-The current mutation implementation reconstructs the logical root from the
-authoritative point set. Git reuses identical blobs and subtrees, but write CPU
-cost is not yet proportional to the number of changed points.
+ID-based mutations read touched points and rewrite changed canonical tree paths;
+filter deletion scans payloads to discover matches. Git reuses identical blobs
+and subtrees, although format version 1 still creates substantial canonical Git
+object work for small mutations.
 
 ## Canonical format and portability
 

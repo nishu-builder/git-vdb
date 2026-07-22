@@ -2,13 +2,30 @@
 name = "git-vdb"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.87"
 description = "An embedded vector database backed by immutable Git trees"
 license = "Apache-2.0"
 repository = "https://github.com/nishu-builder/git-vdb"
 homepage = "https://github.com/nishu-builder/git-vdb"
+documentation = "https://docs.rs/git-vdb"
 readme = "README.md"
 keywords = ["vector-database", "git", "embeddings", "database", "similarity-search"]
 categories = ["database-implementations", "command-line-utilities", "data-structures"]
+include = [
+    "/src/**",
+    "/tests/**",
+    "/examples/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/CONTRIBUTING.md",
+    "/RELEASING.md",
+    "/LICENSE",
+    "/SECURITY.md",
+    "/docs/format.md",
+    "/docs/snapshots.md",
+]
 
 [lib]
 name = "git_vdb"
@@ -33,3 +50,4 @@ lto = "thin"
 
 [package.metadata.docs.rs]
 all-features = true
+targets = []

@@ -40,7 +40,9 @@ flake source filtering includes tracked files and edits to tracked files, but
 not new untracked files; stage a newly added source file before building it.
 
 CI runs `nix flake check` on Linux and macOS. A separate Cargo job preserves
-Windows compatibility.
+Windows compatibility, and the declared minimum Rust version is tested on
+Linux. Public documentation must continue to pass the crate's `missing_docs`
+and rustdoc link lints.
 
 ## Tests and determinism
 
@@ -90,3 +92,6 @@ dependency or formatting churn unrelated to the change.
 
 Contributions are accepted under Apache License 2.0 section 5. No separate
 contributor license agreement is required.
+
+Release preparation and publication are documented in
+[RELEASING.md](RELEASING.md).

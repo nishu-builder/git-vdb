@@ -1,0 +1,81 @@
+name: Release binaries
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+
+  unix:
+    name: Native binary (${{ matrix.os }})
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup update stable --no-self-update
+      - name: Build and archive
+        run: |
+          cargo build --release --locked
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          archive="git-vdb-${GITHUB_REF_NAME}-${host}.tar.gz"
+          mkdir dist
+          cp target/release/git-vdb dist/git-vdb
+          tar -C dist -czf "$archive" git-vdb
+          shasum -a 256 "$archive" > "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_ENV"
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "$archive" "$archive.sha256" --repo "$GITHUB_REPOSITORY" --clobber
+
+  windows:
+    name: Native binary (windows-latest)
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup update stable --no-self-update
+      - name: Build and archive
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          $hostTriple = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '')
+          $archive = "git-vdb-$env:GITHUB_REF_NAME-$hostTriple.zip"
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item target/release/git-vdb.exe dist/git-vdb.exe
+          Compress-Archive -Path dist/git-vdb.exe -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content -NoNewline "$archive.sha256"
+          "archive=$archive" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Upload release asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload $env:GITHUB_REF_NAME $env:archive "$env:archive.sha256" --repo $env:GITHUB_REPOSITORY --clobber

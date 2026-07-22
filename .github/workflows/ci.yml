@@ -47,3 +47,31 @@ jobs:
         run: rustup update stable --no-self-update
       - name: Run tests
         run: cargo test --all-targets --all-features --locked
+
+  msrv:
+    name: Minimum Rust 1.87
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install minimum Rust
+        run: rustup toolchain install 1.87.0 --profile minimal
+      - name: Check library and doctests
+        run: |
+          cargo +1.87.0 check --lib --locked
+          cargo +1.87.0 test --doc --locked
+
+  package:
+    name: Crate package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup update stable --no-self-update
+      - name: Build publishable archive
+        run: cargo package --locked

@@ -1,3 +1,5 @@
+//! Named collections backed by Git commits and compare-and-swap refs.
+
 use crate::root::{
     count_root, diff_roots, get_root, query_root_with_cache, read_meta, validate_config,
     validate_root, SearchView,
@@ -44,14 +46,17 @@ impl Default for CollectionQueryCache {
 }
 
 impl Database {
+    /// Initializes a non-bare Git repository and opens it as a database.
     pub fn init(path: impl AsRef<Path>) -> Result<Self> {
         Self::init_with_options(path, false)
     }
 
+    /// Initializes a bare Git repository and opens it as a database.
     pub fn init_bare(path: impl AsRef<Path>) -> Result<Self> {
         Self::init_with_options(path, true)
     }
 
+    /// Initializes either a bare or non-bare Git repository.
     pub fn init_with_options(path: impl AsRef<Path>, bare: bool) -> Result<Self> {
         let path = path.as_ref();
         if bare {
@@ -62,6 +67,7 @@ impl Database {
         Self::open(path)
     }
 
+    /// Opens an existing bare or non-bare Git repository.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let repository = Repository::open(path.as_ref())?;
         Ok(Self {
@@ -73,6 +79,11 @@ impl Database {
         Ok(Repository::open(&self.path)?)
     }
 
+    /// Creates an empty named collection with canonical configuration.
+    ///
+    /// The method writes the initial immutable root and commit, then creates the
+    /// collection ref. It returns [`Error::CollectionExists`] when the name is
+    /// already present.
     pub fn create_collection(
         &self,
         name: impl AsRef<str>,
@@ -99,6 +110,9 @@ impl Database {
         })
     }
 
+    /// Opens a collection or atomically creates it with the supplied config.
+    ///
+    /// An existing collection with different configuration is rejected.
     pub fn get_or_create_collection(
         &self,
         name: impl AsRef<str>,
@@ -119,6 +133,7 @@ impl Database {
         }
     }
 
+    /// Opens the current mutable view of a named collection.
     pub fn collection(&self, name: impl AsRef<str>) -> Result<Collection> {
         let name = name.as_ref();
         validate_collection_name(name)?;
@@ -134,6 +149,7 @@ impl Database {
         })
     }
 
+    /// Returns collection names in ascending byte order.
     pub fn list_collections(&self) -> Result<Vec<String>> {
         let repo = self.repo()?;
         let mut names = Vec::new();
@@ -147,6 +163,10 @@ impl Database {
         Ok(names)
     }
 
+    /// Deletes only a named collection ref and returns its last root.
+    ///
+    /// Commits and trees remain subject to ordinary Git reachability and
+    /// garbage collection.
     pub fn delete_collection(&self, name: impl AsRef<str>) -> Result<ObjectId> {
         let collection = self.collection(name.as_ref())?;
         let root = collection.root()?;
@@ -169,11 +189,13 @@ impl Collection {
         current_snapshot(repo, &self.name)
     }
 
+    /// Returns the deterministic root resolved by this collection view.
     pub fn root(&self) -> Result<ObjectId> {
         let repo = self.repo()?;
         Ok(self.snapshot(&repo)?.root.into())
     }
 
+    /// Creates a read-only historical view at a root, commit, or revision.
     pub fn at(&self, revision: impl AsRef<str>) -> Result<Self> {
         let repo = self.repo()?;
         let snapshot = resolve_snapshot(&repo, revision.as_ref())?;
@@ -186,6 +208,7 @@ impl Collection {
         })
     }
 
+    /// Returns metadata for the root resolved by this collection view.
     pub fn info(&self) -> Result<CollectionInfo> {
         let repo = self.repo()?;
         let snapshot = self.snapshot(&repo)?;
@@ -199,10 +222,18 @@ impl Collection {
         })
     }
 
+    /// Adds or replaces a non-empty point batch at the current collection root.
+    ///
+    /// The ref is advanced with compare-and-swap semantics. Use
+    /// [`Collection::upsert_expect`] to supply an explicit expected root.
     pub fn upsert(&self, points: Vec<Point>) -> Result<WriteResult> {
         self.upsert_expect(points, None)
     }
 
+    /// Adds or replaces points only if the current root matches `expected_root`.
+    ///
+    /// All immutable objects are written before the collection ref is advanced.
+    /// A stale precondition returns [`Error::StaleRoot`] without advancing it.
     pub fn upsert_expect(
         &self,
         points: Vec<Point>,
@@ -235,10 +266,14 @@ impl Collection {
         })
     }
 
+    /// Deletes the union of selected IDs and filter matches.
+    ///
+    /// The selector must contain at least one ID or a filter.
     pub fn delete(&self, selector: DeleteSelector) -> Result<WriteResult> {
         self.delete_expect(selector, None)
     }
 
+    /// Deletes selected points only when the current root matches a precondition.
     pub fn delete_expect(
         &self,
         selector: DeleteSelector,
@@ -278,18 +313,24 @@ impl Collection {
         })
     }
 
+    /// Retrieves canonically ordered records without similarity scoring.
     pub fn get(&self, request: GetRequest) -> Result<GetResult> {
         let repo = self.repo()?;
         let snapshot = self.snapshot(&repo)?;
         get_root(&repo, snapshot.root, request)
     }
 
+    /// Counts all points or those matching a filter.
     pub fn count(&self, filter: Option<Filter>) -> Result<CountResult> {
         let repo = self.repo()?;
         let snapshot = self.snapshot(&repo)?;
         count_root(&repo, snapshot.root, filter)
     }
 
+    /// Executes an exact or deterministic approximate vector query.
+    ///
+    /// The returned result identifies the root actually read. Query caches are
+    /// scoped to that immutable root and are replaced when the collection moves.
     pub fn query(&self, query: Query) -> Result<QueryResult> {
         let repo = self.repo()?;
         let snapshot = self.snapshot(&repo)?;
@@ -307,6 +348,7 @@ impl Collection {
         query_root_with_cache(&repo, snapshot.root, query, Some(&points))
     }
 
+    /// Returns at most `limit` collection commits, newest first.
     pub fn history(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
         let repo = self.repo()?;
         let mut commit_id = self
@@ -330,6 +372,7 @@ impl Collection {
         Ok(history)
     }
 
+    /// Compares logical points and structural sharing between two revisions.
     pub fn diff(
         &self,
         left_revision: impl AsRef<str>,
@@ -341,6 +384,9 @@ impl Collection {
         diff_roots(&repo, left.root, right.root)
     }
 
+    /// Validates the resolved root without modifying objects or refs.
+    ///
+    /// Full validation recomputes every approximate-index bucket.
     pub fn validate(&self, full: bool) -> Result<ValidationReport> {
         let repo = self.repo()?;
         let snapshot = self.snapshot(&repo)?;

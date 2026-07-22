@@ -1,3 +1,5 @@
+//! Ref-free immutable snapshot construction, mutation, query, and validation.
+
 use crate::filter::matches_filter;
 use crate::root::{
     build_root, count_root, get_root, query_root_with_cache, read_meta, read_point_by_id,
@@ -352,14 +354,20 @@ impl Snapshot {
         })
     }
 
+    /// Retrieves canonically ordered records from this immutable root.
     pub fn get(&self, request: GetRequest) -> Result<GetResult> {
         get_root(&self.repo()?, self.root, request)
     }
 
+    /// Counts all points or those matching a filter at this immutable root.
     pub fn count(&self, filter: Option<crate::Filter>) -> Result<CountResult> {
         count_root(&self.repo()?, self.root, filter)
     }
 
+    /// Executes an exact or deterministic approximate query at this root.
+    ///
+    /// The first exact query may populate a root-scoped immutable search view;
+    /// this cache does not alter persisted objects or the root ID.
     pub fn query(&self, query: Query) -> Result<QueryResult> {
         let repo = self.repo()?;
         query_root_with_cache(&repo, self.root, query, Some(&self.points))
@@ -375,6 +383,9 @@ impl Snapshot {
         .apply(self.root.to_string(), mutations)
     }
 
+    /// Validates this root without changing its object database.
+    ///
+    /// Full validation recomputes every approximate-index bucket.
     pub fn validate(&self, full: bool) -> Result<ValidationReport> {
         validate_root(&self.repo()?, self.root, full)
     }
