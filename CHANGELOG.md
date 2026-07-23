@@ -7,6 +7,8 @@ continuing to read and write the same canonical format version.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-23
+
 ### Changed
 
 - made deterministic sharded IVF-flat format version 2 the sole default for new
@@ -16,7 +18,14 @@ continuing to read and write the same canonical format version.
   format-version-1 roots;
 - replaced v1-only LSH creation flags with format-neutral query defaults in the
   CLI, exposed each root's persisted format in collection and snapshot info,
-  and published the normative format-version-2 specification in rustdoc.
+  and published the normative format-version-2 specification in rustdoc;
+- reused the canonical codebook and unchanged assignments for sample-stable
+  replacement batches, cutting the measured 100,000-point 1% upsert p50 by
+  59.9-64.2% across arm64 and x86_64 without changing its resulting root;
+- replaced per-candidate tree lookups with a compact shard-row search view,
+  cutting the paired 100,000-point warm approximate-query p50 by 17.8-45.1%
+  across x86_64 and arm64 with identical ordered results, scores, and work
+  statistics.
 
 ## [0.1.1] - 2026-07-22
 
@@ -40,6 +49,7 @@ Initial public release.
 - ref-free `SnapshotEngine` and named `Database` / `Collection` APIs;
 - JSON CLI, formal rustdoc API documentation, and format-version-1 specification.
 
-[Unreleased]: https://github.com/nishu-builder/git-vdb/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/nishu-builder/git-vdb/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nishu-builder/git-vdb/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/nishu-builder/git-vdb/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nishu-builder/git-vdb/releases/tag/v0.1.0

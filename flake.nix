@@ -49,7 +49,7 @@
           inherit src;
           strictDeps = true;
           pname = "git-vdb";
-          version = "0.1.1";
+          version = "0.2.0";
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
