@@ -3,7 +3,7 @@ use git_vdb::*;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -11,9 +11,9 @@ use std::str::FromStr;
 #[derive(Parser)]
 #[command(name = "git-vdb", version, about)]
 struct Cli {
-    /// Git repository. Overrides GIT_VDB_REPO.
-    #[arg(long, global = true)]
-    repo: Option<PathBuf>,
+    /// Database directory. Overrides GIT_VDB_REPO.
+    #[arg(long = "db", alias = "repo", global = true)]
+    db: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -34,8 +34,21 @@ enum Command {
     /// Insert or replace points from JSON Lines.
     Upsert {
         collection: String,
-        #[arg(long)]
-        input: PathBuf,
+        /// JSON Lines file, or - for stdin.
+        #[arg(value_name = "FILE", conflicts_with_all = ["legacy_input", "id", "vector"])]
+        input: Option<PathBuf>,
+        /// Compatibility spelling for the input file.
+        #[arg(long = "input", hide = true, conflicts_with_all = ["input", "id", "vector"])]
+        legacy_input: Option<PathBuf>,
+        /// Typed JSON ID or plain string for one inline point.
+        #[arg(long, requires = "vector")]
+        id: Option<String>,
+        /// Inline comma-separated or JSON vector for one point.
+        #[arg(long, requires = "id")]
+        vector: Option<String>,
+        /// Inline JSON object payload for one point.
+        #[arg(long, requires = "id")]
+        payload: Option<String>,
         #[arg(long)]
         expect_root: Option<String>,
     },
@@ -75,11 +88,12 @@ enum Command {
         #[arg(long)]
         at: Option<String>,
     },
-    /// Run a cosine nearest-neighbor query.
+    /// Search by cosine similarity.
+    #[command(name = "search", alias = "query")]
     Query {
         collection: String,
         #[arg(long)]
-        vector: PathBuf,
+        vector: String,
         #[arg(long, default_value_t = 10)]
         limit: usize,
         #[arg(long)]
@@ -181,10 +195,21 @@ fn run(cli: Cli) -> Result<()> {
     }
 
     let repo_path = cli
-        .repo
+        .db
         .or_else(|| std::env::var_os("GIT_VDB_REPO").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
-    let database = Database::open(&repo_path)?;
+    let mutating = matches!(
+        &cli.command,
+        Command::Collection {
+            command: CollectionCommand::Create(_) | CollectionCommand::Delete { .. }
+        } | Command::Upsert { .. }
+            | Command::Delete { .. }
+    );
+    let store = mutating.then(|| Store::open(&repo_path)).transpose()?;
+    let database = match &store {
+        Some(store) => store.advanced().clone(),
+        None => Database::open(&repo_path)?,
+    };
     match cli.command {
         Command::Init { .. } => unreachable!(),
         Command::Collection { command } => match command {
@@ -225,15 +250,25 @@ fn run(cli: Cli) -> Result<()> {
         Command::Upsert {
             collection,
             input,
+            legacy_input,
+            id,
+            vector,
+            payload,
             expect_root,
         } => {
-            let points = read_json_lines(&input)?;
+            let points = read_upsert_points(input.or(legacy_input), id, vector, payload)?;
             let expected = parse_object_id(expect_root)?;
-            print_json(
-                &database
+            let result = match expected {
+                Some(expected) => database
                     .collection(collection)?
-                    .upsert_expect(points, expected)?,
-            )?;
+                    .upsert_expect(points, Some(expected))?,
+                None => store
+                    .as_ref()
+                    .expect("upsert opens a store")
+                    .collection(collection)
+                    .upsert(points)?,
+            };
+            print_json(&result)?;
         }
         Command::Get {
             collection,
@@ -302,7 +337,7 @@ fn run(cli: Cli) -> Result<()> {
             let collection = at_collection(database.collection(collection)?, at.as_deref())?;
             print_json(
                 &collection.query(Query {
-                    vector: read_vector(&vector)?,
+                    vector: parse_vector_arg(&vector)?,
                     limit,
                     filter: read_optional_json(filter.as_deref())?,
                     with_payload,
@@ -383,10 +418,71 @@ fn read_vector(path: &Path) -> Result<Vec<f32>> {
     }
 }
 
+fn parse_vector_arg(value: &str) -> Result<Vec<f32>> {
+    let path = Path::new(value);
+    if path.exists() {
+        return read_vector(path);
+    }
+    if value.trim_start().starts_with('[') {
+        return Ok(serde_json::from_str(value)?);
+    }
+    value
+        .split(',')
+        .map(|component| {
+            component.trim().parse::<f32>().map_err(|error| {
+                Error::Invalid(format!("invalid vector component {component:?}: {error}"))
+            })
+        })
+        .collect()
+}
+
+fn read_upsert_points(
+    input: Option<PathBuf>,
+    id: Option<String>,
+    vector: Option<String>,
+    payload: Option<String>,
+) -> Result<Vec<Point>> {
+    match (input, id, vector) {
+        (Some(path), None, None) => read_json_lines(&path),
+        (None, Some(id), Some(vector)) => {
+            let payload = match payload {
+                Some(payload) => match serde_json::from_str::<Value>(&payload)? {
+                    Value::Object(payload) => payload,
+                    _ => {
+                        return Err(Error::Invalid(
+                            "inline payload must be a JSON object".into(),
+                        ))
+                    }
+                },
+                None => JsonObject::new(),
+            };
+            Ok(vec![Point {
+                id: parse_ids(vec![id])?.remove(0),
+                vector: parse_vector_arg(&vector)?,
+                payload,
+            }])
+        }
+        (None, None, None) => Err(Error::Invalid(
+            "upsert requires a FILE, or both --id and --vector".into(),
+        )),
+        _ => Err(Error::Invalid(
+            "upsert accepts either a FILE or one --id/--vector point".into(),
+        )),
+    }
+}
+
 fn read_json_lines(path: &Path) -> Result<Vec<Point>> {
+    if path == Path::new("-") {
+        let stdin = io::stdin();
+        return read_json_lines_from(stdin.lock(), "stdin");
+    }
     let file = File::open(path)
         .map_err(|error| Error::Invalid(format!("cannot open {}: {error}", path.display())))?;
-    BufReader::new(file)
+    read_json_lines_from(BufReader::new(file), &path.display().to_string())
+}
+
+fn read_json_lines_from(reader: impl BufRead, source: &str) -> Result<Vec<Point>> {
+    reader
         .lines()
         .enumerate()
         .filter_map(|(line_number, line)| match line {
@@ -394,13 +490,12 @@ fn read_json_lines(path: &Path) -> Result<Vec<Point>> {
             Ok(line) => Some(serde_json::from_str(&line).map_err(|error| {
                 Error::Invalid(format!(
                     "invalid JSON on {} line {}: {error}",
-                    path.display(),
+                    source,
                     line_number + 1
                 ))
             })),
             Err(error) => Some(Err(Error::Invalid(format!(
-                "cannot read {}: {error}",
-                path.display()
+                "cannot read {source}: {error}"
             )))),
         })
         .collect()

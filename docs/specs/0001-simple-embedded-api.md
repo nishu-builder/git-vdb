@@ -97,7 +97,7 @@ reads, validation, and tuning controls remain available.
       preserves the existing automatic exact/approximate selection.
 - [x] Common helpers cover ID retrieval, ID deletion, count, and peek without
       request-structure boilerplate.
-- [ ] The CLI can reach a first persisted query without explicit `init`,
+- [x] The CLI can reach a first persisted query without explicit `init`,
       `collection create`, dimension flags, or temporary query-vector files.
 - [ ] README and rustdoc lead with the high-level persistent API; snapshots,
       roots, format documents, and index tuning are presented as advanced topics.
@@ -340,6 +340,15 @@ rustdoc, and Rust 1.87 library/doctest checks pass.
 - Preserve advanced commands and JSON output.
 - Exercise the complete shell quickstart in an integration test.
 
+**Evidence (2026-07-23):** the visible global option is `--db`, with `--repo`
+retained as an alias. Mutating commands safely open or create the repository,
+while a read against a missing path fails without creating it. Upsert accepts a
+positional JSONL file, `-` for stdin, or an inline `--id`/`--vector` point;
+`search` accepts inline comma-separated or JSON vectors and retains `query` as
+an alias. The new end-to-end integration test starts from a nonexistent path and
+exercises all three input forms, search, payload output, and count. The original
+CLI/Git transport test passes unchanged through compatibility aliases.
+
 ### Rung 4: Documentation and examples
 
 - Replace the README's primary example and reorganize links.
@@ -400,8 +409,9 @@ integration contract.
    or should rustdoc expose only their methods and use shorter names?
 2. Should `search` always include payloads, or should the facade return a smaller
    `Hit` containing ID, score, and metadata while vectors remain opt-in?
-3. Is `--db` worth introducing, or is consistently documenting the existing
-   `--repo` flag simpler overall?
+3. Resolved: use `--db` in first-use documentation because it names the user
+   concept; retain `--repo` as a visible compatibility alias because Git-aware
+   workflows still benefit from that precision.
 4. Does an optional local embedding provider meet the MSRV and platform gates,
    or should the first text release stop at a provider-independent adapter?
 

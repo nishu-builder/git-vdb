@@ -3,8 +3,9 @@ use git_vdb::{
 };
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use tempfile::TempDir;
 
 fn point(id: &str, vector: [f32; 2], payload: Value) -> Point {
@@ -247,6 +248,86 @@ fn cli_outputs_json_and_stock_git_can_transfer_and_maintain_objects() {
             .arg(&remote)
             .args(["cat-file", "-t", root]),
     );
+}
+
+#[test]
+fn cli_first_use_auto_creates_and_accepts_files_stdin_and_inline_vectors() {
+    let temp = TempDir::new().unwrap();
+    let binary = env!("CARGO_BIN_EXE_git-vdb");
+    let missing = temp.path().join("missing.git");
+    let failed_read = Command::new(binary)
+        .args(["--db", missing.to_str().unwrap(), "count", "documents"])
+        .output()
+        .unwrap();
+    assert!(!failed_read.status.success());
+    assert!(!missing.exists());
+
+    let repo = temp.path().join("vectors.git");
+    let input = temp.path().join("points.jsonl");
+    fs::write(
+        &input,
+        "{\"id\":\"east\",\"vector\":[1.0,0.0],\"payload\":{\"label\":\"East\"}}\n",
+    )
+    .unwrap();
+    assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "upsert",
+        "documents",
+        input.to_str().unwrap(),
+    ]));
+    assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "upsert",
+        "documents",
+        "--id",
+        "north",
+        "--vector",
+        "0,1",
+        "--payload",
+        "{\"label\":\"North\"}",
+    ]));
+
+    let mut child = Command::new(binary)
+        .args(["--db", repo.to_str().unwrap(), "upsert", "documents", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"id\":\"west\",\"vector\":[-1.0,0.0],\"payload\":{}}\n")
+        .unwrap();
+    let stdin_write = child.wait_with_output().unwrap();
+    assert!(stdin_write.status.success(), "{stdin_write:?}");
+
+    let searched = assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "search",
+        "documents",
+        "--vector",
+        "0.9,0.1",
+        "--limit",
+        "2",
+        "--with-payload",
+    ]));
+    let searched: Value = serde_json::from_slice(&searched.stdout).unwrap();
+    assert_eq!(searched["points"][0]["id"], "east");
+    assert_eq!(searched["points"][0]["payload"]["label"], "East");
+
+    let counted = assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "count",
+        "documents",
+    ]));
+    let counted: Value = serde_json::from_slice(&counted.stdout).unwrap();
+    assert_eq!(counted["count"], 3);
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
