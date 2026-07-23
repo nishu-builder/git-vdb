@@ -1,8 +1,8 @@
 [package]
 name = "git-vdb"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.97"
 description = "An embedded vector database backed by immutable Git trees"
 license = "Apache-2.0"
 repository = "https://github.com/nishu-builder/git-vdb"
@@ -41,12 +41,17 @@ include = [
 name = "git_vdb"
 path = "src/lib.rs"
 
+[features]
+default = []
+fastembed = ["dep:fastembed"]
+
 [[bin]]
 name = "git-vdb"
 path = "src/bin/git-vdb.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+fastembed = { version = "5.17.3", optional = true, default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 git2 = "0.21"
 hex = "0.4"
 serde = { version = "1.0", features = ["derive"] }

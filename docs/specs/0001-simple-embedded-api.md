@@ -402,6 +402,29 @@ compressed), compiles the generated archive, and stops before upload as expected
 The final audit worktree is clean; the five implementation rungs are isolated in
 preceding commits.
 
+### Rung 7: Current Rust and first-party local embeddings
+
+- Pin the repository to the current stable Rust toolchain and align the declared
+  supported Rust version, CI, release instructions, and badge.
+- Re-run the previously blocked FastEmbed spike without adding any dependency
+  to the default feature set.
+- Ship the provider only if its optional build, real local inference path,
+  rustdoc, package archive, and supported CI platforms pass.
+
+**Evidence (2026-07-23):** the official stable channel and `rustup` both report
+Rust 1.97.1. `fastembed 5.17.3` now compiles with its Rustls download features
+behind an empty-by-default `fastembed` feature. A real end-to-end example
+downloaded and cached the default model, embedded two documents, persisted them,
+embedded a query, and returned the expected document. `FastEmbedder` serializes
+the provider's mutable inference session behind a mutex and persists a stable
+model-variant/provider-version identity through the existing text layer. The
+historical Rust 1.87 stop above remains as evidence of why the provider was not
+included in the preceding release. Nix validates the default network-free
+package because its sandbox cannot link a build-script-downloaded ONNX archive;
+dedicated Linux and Windows CI jobs compile the opt-in feature, while local
+macOS testing covers actual model download and inference. All five native Nix
+checks then passed, as did the 46-file crate archive build and publish dry run.
+
 ## Stop Conditions
 
 Work continues rung by rung until all goals are checked or one of these is
@@ -410,7 +433,8 @@ documented with reproducing evidence:
 1. lazy first-write creation cannot be made race-safe without changing canonical
    storage or weakening compare-and-swap guarantees;
 2. the simple facade produces different roots for equivalent inputs;
-3. required dependencies cannot support Rust 1.87 or the current CI platforms;
+3. required dependencies cannot support the declared Rust version or current CI
+   platforms;
 4. the text provider requires network/model behavior in the default core crate;
 5. a change causes a correctness or non-target performance regression that
    cannot be isolated within the rung.
@@ -431,7 +455,7 @@ integration contract.
 | Concurrency | First-write race test has no silent ref overwrite |
 | Documentation | Doctests and `RUSTDOCFLAGS='-D warnings' cargo doc --no-deps` |
 | Code quality | fmt, clippy `-D warnings`, full locked tests |
-| Toolchains | Rust 1.87 library and doctests; Nix flake checks |
+| Toolchains | Rust 1.97.1 library and doctests; Nix flake checks |
 | Distribution | `cargo publish --dry-run --locked` and intended archive list |
 
 ## Open Questions
@@ -444,10 +468,9 @@ integration contract.
 3. Resolved: use `--db` in first-use documentation because it names the user
    concept; retain `--repo` as a visible compatibility alias because Git-aware
    workflows still benefit from that precision.
-4. Resolved: stop this release at the provider-independent adapter. The current
-   leading local candidate fails the Rust 1.87 gate through `ort`; reconsider a
-   bundled provider only when all MSRV, platform, offline, and packaging gates
-   pass without affecting the default vector build.
+4. Superseded in rung 7: the Rust 1.97.1 upgrade clears FastEmbed's `ort` gate.
+   The provider now ships as an optional feature, while the default vector build
+   retains no model, network, or ONNX dependency.
 
 These questions may be resolved during their relevant rung. Decisions must be
 recorded here before the goal is marked implemented.

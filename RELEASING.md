@@ -14,8 +14,11 @@ package contents and generated documentation have been inspected.
 
    ```sh
    nix flake check --print-build-logs
-   cargo +1.87.0 check --lib --locked
-   cargo +1.87.0 test --doc --locked
+   cargo test --all-targets --all-features --locked
+   cargo clippy --all-targets --all-features --locked -- -D warnings
+   RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features --locked
+   cargo +1.97.1 check --lib --locked
+   cargo +1.97.1 test --doc --locked
    cargo package --list
    cargo publish --dry-run --locked
    ```

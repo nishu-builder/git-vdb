@@ -5,6 +5,11 @@ use crate::{
 };
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(feature = "fastembed")]
+use std::sync::Mutex;
+
+#[cfg(feature = "fastembed")]
+pub use fastembed::{EmbeddingModel as FastEmbedModel, TextInitOptions as FastEmbedInitOptions};
 
 /// Converts text batches into vectors from one stable model space.
 pub trait Embedder {
@@ -13,6 +18,55 @@ pub trait Embedder {
 
     /// Embeds every input string in the same order.
     fn embed(&self, input: &[String]) -> Result<Vec<Vec<f32>>>;
+}
+
+/// A local FastEmbed text model, available with the `fastembed` feature.
+///
+/// The model is downloaded on first initialization and cached for offline use.
+/// Ordinary `git-vdb` builds do not include FastEmbed or an ONNX runtime.
+#[cfg(feature = "fastembed")]
+pub struct FastEmbedder {
+    model: Mutex<fastembed::TextEmbedding>,
+    model_id: String,
+}
+
+#[cfg(feature = "fastembed")]
+impl FastEmbedder {
+    /// Initializes FastEmbed's default English model.
+    pub fn try_new() -> Result<Self> {
+        Self::try_with_model(FastEmbedModel::default())
+    }
+
+    /// Initializes one of FastEmbed's supported text models.
+    pub fn try_with_model(model: FastEmbedModel) -> Result<Self> {
+        Self::try_from_options(FastEmbedInitOptions::new(model))
+    }
+
+    /// Initializes a model with explicit FastEmbed cache, runtime, and length options.
+    pub fn try_from_options(options: FastEmbedInitOptions) -> Result<Self> {
+        let model_id = format!("fastembed/{}@5.17.3", options.model_name);
+        let model = fastembed::TextEmbedding::try_new(options)
+            .map_err(|error| Error::Embedding(error.to_string()))?;
+        Ok(Self {
+            model: Mutex::new(model),
+            model_id,
+        })
+    }
+}
+
+#[cfg(feature = "fastembed")]
+impl Embedder for FastEmbedder {
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    fn embed(&self, input: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.model
+            .lock()
+            .map_err(|_| Error::Embedding("FastEmbed model lock was poisoned".into()))?
+            .embed(input, None)
+            .map_err(|error| Error::Embedding(error.to_string()))
+    }
 }
 
 /// A text document with a typed ID and optional JSON metadata.

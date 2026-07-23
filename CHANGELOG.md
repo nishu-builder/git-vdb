@@ -7,6 +7,8 @@ continuing to read and write the same canonical format version.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-23
+
 ### Added
 
 - added a small persistent `Store` facade that safely opens or creates a local
@@ -15,6 +17,8 @@ continuing to read and write the same canonical format version.
 - added a provider-independent text collection that embeds documents and text
   queries through a user-supplied `Embedder` while persisting and checking the
   embedding-model identity;
+- added an optional `fastembed` feature with a first-party local model adapter,
+  cached offline inference, and a compiled end-to-end example;
 - added executable quickstart, persistence, filtering, history, and text examples
   plus task-oriented guides and an agent-facing documentation map.
 
@@ -26,7 +30,9 @@ continuing to read and write the same canonical format version.
 - simplified CLI first use with safe database auto-creation, inferred collection
   dimensions, positional JSONL or stdin, inline points and vectors, and the
   primary `--db` and `search` spellings; retained `--repo`, `--input`, and
-  `query` compatibility aliases.
+  `query` compatibility aliases;
+- pinned the supported toolchain and declared Rust version to Rust 1.97,
+  clearing the ONNX dependency blocker for the optional local text path.
 
 ## [0.2.0] - 2026-07-23
 
@@ -70,7 +76,8 @@ Initial public release.
 - ref-free `SnapshotEngine` and named `Database` / `Collection` APIs;
 - JSON CLI, formal rustdoc API documentation, and format-version-1 specification.
 
-[Unreleased]: https://github.com/nishu-builder/git-vdb/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nishu-builder/git-vdb/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nishu-builder/git-vdb/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nishu-builder/git-vdb/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/nishu-builder/git-vdb/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/nishu-builder/git-vdb/releases/tag/v0.1.0

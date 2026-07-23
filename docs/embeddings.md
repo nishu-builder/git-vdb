@@ -1,5 +1,31 @@
 # Text and embedding models
 
+For the shortest fully local path, enable the optional FastEmbed integration:
+
+```sh
+cargo add git-vdb --features fastembed
+```
+
+```rust,ignore
+use git_vdb::{open, Document, FastEmbedder};
+
+# fn main() -> git_vdb::Result<()> {
+let db = open("./documents.git")?;
+let docs = db.text_collection("docs", FastEmbedder::try_new()?)?;
+docs.upsert_documents([Document::new("guide", "Git-native vector search")])?;
+let hits = docs.search_text("versioned search", 5)?;
+# Ok(())
+# }
+```
+
+The model downloads on first initialization, is cached for offline use, and is
+serialized behind the collection handle so concurrent calls remain safe. The
+feature is disabled by default, so vector-only builds never include FastEmbed,
+model downloads, or an ONNX runtime. The same path is compiled as
+`examples/text_fastembed.rs` whenever the feature is enabled.
+
+## Custom providers
+
 The core database never downloads a model or calls a network service. Implement
 the small `Embedder` trait with a local model or provider client, then bind its
 stable model identity to a text collection:
@@ -43,14 +69,13 @@ may use every other key. The model ID is persisted as the collection's vector
 space and checked whenever the collection is reopened, so different embedding
 models cannot be mixed silently.
 
-## Why there is no bundled default model
+## Provider decision
 
-The bounded provider spike tested `fastembed 5.17.3` with default features
-disabled. Its required `ort 2.0.0-rc.12` and `ort-sys` packages require Rust
-1.88, which fails this crate's Rust 1.87 compatibility gate. Bundling its default
-features would also introduce model/network and native-runtime behavior into the
-default build.
+The original provider spike stopped because FastEmbed's ONNX dependencies
+required newer Rust than the crate's former Rust 1.87 floor. With the toolchain
+now pinned to Rust 1.97.1, the integration passes that gate. It remains an
+explicit feature so the default vector database stays small and network-free.
 
-The provider-independent adapter therefore ships without new dependencies. A
-local default can be added later when it satisfies the MSRV, platform, offline,
-model-identity, and package gates without complicating ordinary vector use.
+The persisted model space includes the FastEmbed model variant and adapter
+version. To use a different supported model, pass a `FastEmbedModel` to
+`FastEmbedder::try_with_model`.

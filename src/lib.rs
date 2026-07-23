@@ -90,6 +90,8 @@ pub use model::{
 pub use snapshot::{Snapshot, SnapshotEngine};
 pub use store::{open, CollectionHandle, Store};
 pub use text::{Document, Embedder, TextCollection};
+#[cfg(feature = "fastembed")]
+pub use text::{FastEmbedInitOptions, FastEmbedModel, FastEmbedder};
 
 use thiserror::Error;
 
@@ -106,6 +108,9 @@ pub enum Error {
     /// A filesystem operation failed.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// An embedding provider could not initialize or generate vectors.
+    #[error("embedding error: {0}")]
+    Embedding(String),
     /// The request or persisted value violated a declared invariant.
     #[error("invalid request: {0}")]
     Invalid(String),

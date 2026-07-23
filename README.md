@@ -3,7 +3,7 @@
 [![CI](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml/badge.svg)](https://github.com/nishu-builder/git-vdb/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/git-vdb.svg)](https://crates.io/crates/git-vdb)
 [![docs.rs](https://img.shields.io/docsrs/git-vdb/latest?label=docs.rs)](https://docs.rs/git-vdb/latest/git_vdb/)
-[![MSRV](https://img.shields.io/badge/MSRV-1.87-blue.svg)](https://www.rust-lang.org/)
+[![MSRV](https://img.shields.io/badge/MSRV-1.97-blue.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A local vector database stored entirely in Git.
@@ -49,6 +49,9 @@ git-vdb --db vectors.git search docs --vector '0.9,0.1' --limit 1
 ```
 
 Batch upserts accept a JSON Lines file or `-` for stdin.
+
+Need local text embeddings? Use `cargo add git-vdb --features fastembed`; the
+[embedding guide](docs/embeddings.md) has the complete example.
 
 ## Why Git-native?
 
