@@ -3,6 +3,8 @@ use git_vdb::{
 };
 use serde::Deserialize;
 use serde_json::{json, Map};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +46,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or("mutation fraction is not UTF-8")?
                     .parse()?,
                 Path::new(output),
+                false,
+            )
+        }
+        [command, input, repository, build_report, fraction, output]
+            if command == "mutate-sample-stable" =>
+        {
+            mutate(
+                Path::new(input),
+                Path::new(repository),
+                Path::new(build_report),
+                fraction
+                    .to_str()
+                    .ok_or("mutation fraction is not UTF-8")?
+                    .parse()?,
+                Path::new(output),
+                true,
             )
         }
         [command, repository, build_report, output] if command == "validate" => validate(
@@ -52,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Path::new(output),
         ),
         _ => Err(
-            "usage: lancedb_git_vdb_profile build INPUT.json REPOSITORY OUTPUT.json\n       lancedb_git_vdb_profile query INPUT.json REPOSITORY BUILD.json exact|approximate|approximate-after-exact OUTPUT.json\n       lancedb_git_vdb_profile mutate INPUT.json REPOSITORY BUILD.json FRACTION OUTPUT.json\n       lancedb_git_vdb_profile validate REPOSITORY BUILD.json OUTPUT.json"
+            "usage: lancedb_git_vdb_profile build INPUT.json REPOSITORY OUTPUT.json\n       lancedb_git_vdb_profile query INPUT.json REPOSITORY BUILD.json exact|approximate|approximate-after-exact OUTPUT.json\n       lancedb_git_vdb_profile mutate INPUT.json REPOSITORY BUILD.json FRACTION OUTPUT.json\n       lancedb_git_vdb_profile mutate-sample-stable INPUT.json REPOSITORY BUILD.json FRACTION OUTPUT.json\n       lancedb_git_vdb_profile validate REPOSITORY BUILD.json OUTPUT.json"
                 .into(),
         ),
     }
@@ -64,6 +82,7 @@ fn mutate(
     build_report: &Path,
     fraction: f64,
     output: &Path,
+    sample_stable: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let spec = read_spec(input)?;
     if !(0.0..=1.0).contains(&fraction) || fraction == 0.0 {
@@ -72,7 +91,11 @@ fn mutate(
     let vectors = read_vectors(&spec.points_path, spec.point_count, spec.dimension)?;
     let points = make_points(&vectors);
     let count = ((spec.point_count as f64 * fraction).round() as usize).clamp(1, spec.point_count);
-    let mut changed = points[..count].to_vec();
+    let mut changed = if sample_stable {
+        sample_stable_points(points, count)?
+    } else {
+        points[..count].to_vec()
+    };
     for point in &mut changed {
         point.vector[0] += 0.001;
     }
@@ -104,6 +127,7 @@ fn mutate(
             "root": root,
             "fraction": fraction,
             "points": count,
+            "sample_stable": sample_stable,
             "upsert_us": upsert_us,
             "delete_us": delete_us,
             "upsert_root": upserted.root(),
@@ -112,6 +136,45 @@ fn mutate(
         }))?,
     )?;
     Ok(())
+}
+
+fn sample_stable_points(
+    points: Vec<Point>,
+    count: usize,
+) -> Result<Vec<Point>, Box<dyn std::error::Error>> {
+    let mut sample_order = points
+        .iter()
+        .map(|point| Ok((uint_id_digest(&point.id)?, point.id.clone())))
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    sample_order.sort();
+    let sample_ids = sample_order
+        .into_iter()
+        .take(8_192.min(points.len()))
+        .map(|(_, id)| id)
+        .collect::<HashSet<_>>();
+    let selected = points
+        .into_iter()
+        .filter(|point| !sample_ids.contains(&point.id))
+        .take(count)
+        .collect::<Vec<_>>();
+    if selected.len() != count {
+        return Err(format!(
+            "sample-stable mutation requested {count} points but only {} are outside the training sample",
+            selected.len()
+        )
+        .into());
+    }
+    Ok(selected)
+}
+
+fn uint_id_digest(id: &PointId) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let PointId::UInt(value) = id else {
+        return Err("sample-stable profile expects generated unsigned IDs".into());
+    };
+    let mut bytes = [0_u8; 10];
+    bytes[..2].copy_from_slice(b"u\0");
+    bytes[2..].copy_from_slice(&value.to_be_bytes());
+    Ok(Sha256::digest(bytes).into())
 }
 
 fn validate(

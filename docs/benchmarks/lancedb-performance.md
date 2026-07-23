@@ -526,6 +526,83 @@ latency is still 2.4x slower and Git-native mutations remain hundreds of times
 slower. Those are honest next optimization targets; neither justifies retaining
 the much slower and less accurate version-1 default.
 
+### Post-graduation hot-path rungs
+
+Two post-graduation implementation rungs were measured on 2026-07-23 against
+the unchanged 100,000-point GloVe-25 root. Each paired profile uses five cold
+runner processes, one excluded warmup for queries, 100 measured approximate
+queries, and a fresh copy of the retained repository for each mutation
+repetition. Baseline and candidate commands, source vectors, roots, and machine
+are identical within each Apple M4 Pro arm64 and `m6i.2xlarge` x86_64 pair.
+
+The mutation rung detects replacement batches that leave the bounded training
+sample unchanged. It reuses the canonical sample and codebook, decodes and
+rewrites only touched point shards, reuses unchanged assignments, and updates
+affected postings. Sample-changing replacements, insertions, and deletions keep
+the complete canonical rebuild path. A focused 8,193-point test requires the
+incremental result to equal a clean rebuild and proves sample/codebook object
+reuse.
+
+| Sample-stable 1% replacement metric | Baseline | Candidate | Movement |
+|---|---:|---:|---:|
+| arm64 upsert p50 | 1.848 s | 0.741 s | 59.9% lower |
+| x86_64 upsert p50 | 2.835 s | 1.016 s | 64.2% lower |
+| arm64 delete p50 | 1.999 s | 1.992 s | 0.4% lower |
+| x86_64 delete p50 | 2.869 s | 2.872 s | 0.1% higher |
+| arm64 peak RSS p50 | 279.5 MB | 274.1 MB | 1.9% lower |
+
+All five candidate upserts retain root
+`ffe493010add0e2be89d3911e49236afb26604f6`, exactly matching the unchanged
+implementation. The separately reported standard 1% mutation remains
+sample-changing and is not represented by this faster number.
+
+The ANN rung replaces a binary-tree lookup keyed by `(shard, row)` for every
+scored candidate with a shard-indexed row vector derived from the immutable
+root. It changes no stored object or public result. At the unchanged operating
+point each query scores 10,000 vectors.
+
+| Warm approximate metric | Baseline | Candidate | Movement |
+|---|---:|---:|---:|
+| arm64 query p50 | 1.895 ms | 1.040 ms | 45.1% lower |
+| x86_64 query p50 | 5.554 ms | 4.565 ms | 17.8% lower |
+| x86_64 100-query batch | 553.975 ms | 459.568 ms | 17.0% lower |
+| arm64 peak RSS p50 | 234.8 MB | 226.7 MB | 3.5% lower |
+
+Every ordered ID, score bit, result count, work statistic, and root is identical
+across all paired profiles after timing fields are removed.
+
+The unchanged full five-repetition protocol was also run for the baseline and
+candidate on the same otherwise-idle x86_64 box. It confirms that the target
+gain survives the complete workload: approximate p50 falls from 4.660 to 4.229
+ms, concurrency-1 throughput rises 14.5%, and concurrency-4 throughput rises
+25.6%. Build moves 0.8%, RSS 0.1%, and every standard 1%/10%/100% upsert and
+delete moves 1.3-2.1%, all within the 5% gate. The sequential full runs showed
+a 31% exact-query movement while LanceDB exact moved 7-10% with the same run
+ordering; the required interleaved retained-root check instead measures exact
+p50 at 4.015 versus 4.086 ms and batch time at 401.664 versus 410.424 ms, both
+within 2.2%. Exact results are identical in all pairs.
+
+On the candidate's clean full run, git-vdb versus LanceDB is 2.475 versus 2.429
+s for build, 9.928 versus 7.915 ms for exact query, 4.229 versus 1.854 ms for
+single-query ANN, 1,273.8 versus 901.0 qps for concurrency-4 ANN, 751.8 versus
+876.1 MB peak RSS, and 105.2 versus 206.1 bytes per point. Git-vdb recall at
+k=1/10/100 is 0.980/0.969/0.939 versus 0.930/0.912/0.833. The remaining gap is
+therefore 2.28x single-query ANN latency and the intentionally visible
+Git-native mutation cost; the throughput, recall, memory, and storage advantages
+remain.
+
+The local arm64 candidate-report aggregate is
+`cfda782ebd70c69059c8305c054f827a9a56c8a8c62f836041b5d00fcd593b28`.
+The x86_64 full candidate summary SHA-256 is
+`53d3dd38b46a97cbdbc5b636d66bf6056c19522414ff21ddc275e1d8035494f9`;
+its raw JSON aggregate is
+`78f86a612aadc4d8767b42d4c91a8d7889c3ca55637b69941c4d8dc9bf3797bd`.
+The same-box baseline summary is
+`43c0590ccb3f2e2fc7abb753e4b0549a8cacbb20a7152376b9f86cdaa2ffc171`,
+and the interleaved x86_64 profile aggregate is
+`c6426457ae5b020780169f7fc91445f3f9e0f54ba9b8eb53b3012ba647680510`.
+Raw reports remain untracked under `target/lancedb-results/v0.2-perf`.
+
 ## Reproduction, artifacts, and commits
 
 The combined full-run summary is retained at the A4 path above. The A5/A6 raw
@@ -551,6 +628,8 @@ target/release/examples/lancedb_git_vdb_profile \
   query CASE/run.json RETAINED.git build.json approximate-after-exact query.json
 target/release/examples/lancedb_git_vdb_profile \
   mutate CASE/run.json RETAINED.git build.json 0.01 mutate.json
+target/release/examples/lancedb_git_vdb_profile \
+  mutate-sample-stable CASE/run.json RETAINED.git build.json 0.01 stable.json
 git clone --mirror file://$PWD/RETAINED.git PACKED.git
 git --git-dir=PACKED.git gc
 

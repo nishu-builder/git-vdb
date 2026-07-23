@@ -99,7 +99,7 @@ pub(crate) struct StoredPoint {
 pub(crate) struct SearchView {
     pub(crate) points: Vec<Point>,
     point_trees: OnceLock<Vec<(Oid, usize)>>,
-    v2_rows: OnceLock<BTreeMap<(u16, u32), usize>>,
+    v2_rows: OnceLock<Vec<Vec<usize>>>,
     pub(crate) v2_index: OnceLock<crate::root_v2::V2SearchIndex>,
 }
 
@@ -123,28 +123,25 @@ impl SearchView {
                     .or_default()
                     .push((point.id.clone(), index));
             }
-            let mut rows = BTreeMap::new();
+            let mut rows = Vec::<Vec<usize>>::new();
             for (shard, mut points) in grouped {
                 points.sort_by(|left, right| left.0.cmp(&right.0));
-                for (row, (_, index)) in points.into_iter().enumerate() {
-                    rows.insert(
-                        (
-                            shard,
-                            u32::try_from(row).map_err(|_| {
-                                Error::Corrupt("format-2 shard row exceeds u32".into())
-                            })?,
-                        ),
-                        index,
-                    );
+                let shard = usize::from(shard);
+                if rows.len() <= shard {
+                    rows.resize_with(shard + 1, Vec::new);
                 }
+                rows[shard] = points.into_iter().map(|(_, index)| index).collect();
             }
             let _ = self.v2_rows.set(rows);
         }
+        let row = usize::try_from(row)
+            .map_err(|_| Error::Corrupt("format-2 posting row exceeds usize".into()))?;
         let index = self
             .v2_rows
             .get()
             .expect("format-2 row lookup was initialized")
-            .get(&(shard, row))
+            .get(usize::from(shard))
+            .and_then(|rows| rows.get(row))
             .copied()
             .ok_or_else(|| Error::Corrupt("format-2 posting references a missing row".into()))?;
         Ok(&self.points[index])

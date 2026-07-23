@@ -35,6 +35,11 @@ struct CanonicalIndex<'a> {
     sample: Vec<&'a Point>,
 }
 
+struct SampleEntry {
+    id: PointId,
+    vector_hash: [u8; 32],
+}
+
 pub(crate) fn build_root(
     repo: &Repository,
     config: &CollectionConfig,
@@ -122,6 +127,64 @@ pub(crate) fn update_root(
     config: &CollectionConfig,
     changes: &BTreeMap<PointId, PointChange>,
 ) -> Result<Oid> {
+    let old_meta = crate::root::read_meta(repo, previous_root)?;
+    let final_point_count =
+        changes
+            .values()
+            .try_fold(old_meta.point_count, |count, change| {
+                match (change.old.is_some(), change.new.is_some()) {
+                    (false, true) => count
+                        .checked_add(1)
+                        .ok_or_else(|| Error::Invalid("point count overflows usize".into())),
+                    (true, false) => count
+                        .checked_sub(1)
+                        .ok_or_else(|| Error::Corrupt("point count underflows metadata".into())),
+                    _ => Ok(count),
+                }
+            })?;
+    let old_index_tree = root_tree(repo, previous_root, "index")?;
+    let old_ivf_tree = child_tree(repo, old_index_tree, "ivf-flat-v2")?;
+    let old_sample = decode_sample(
+        &read_blob(repo, old_ivf_tree, "sample.bin")?,
+        old_meta.point_count.min(SAMPLE_LIMIT),
+    )?;
+    if centroid_count(old_meta.point_count) == centroid_count(final_point_count)
+        && changes
+            .values()
+            .all(|change| change.old.is_some() && change.new.is_some())
+        && sample_vectors_unchanged(&old_sample, changes)
+    {
+        return update_root_sample_stable(
+            repo,
+            previous_root,
+            config,
+            final_point_count,
+            changes,
+            old_index_tree,
+            old_ivf_tree,
+        );
+    }
+
+    update_root_rebuild(
+        repo,
+        previous_root,
+        config,
+        final_point_count,
+        changes,
+        old_index_tree,
+        old_ivf_tree,
+    )
+}
+
+fn update_root_rebuild(
+    repo: &Repository,
+    previous_root: Oid,
+    config: &CollectionConfig,
+    final_point_count: usize,
+    changes: &BTreeMap<PointId, PointChange>,
+    old_index_tree: Oid,
+    old_ivf_tree: Oid,
+) -> Result<Oid> {
     let mut points = read_all_points(repo, previous_root)?;
     let mut changed_shards = Vec::with_capacity(changes.len());
     for (id, change) in changes {
@@ -176,8 +239,6 @@ pub(crate) fn update_root(
     let old_meta = crate::root::read_meta(repo, previous_root)?;
     let old_index = read_index(repo, previous_root, &old_meta)?;
     let new_index = canonical_index(&points)?;
-    let old_index_tree = root_tree(repo, previous_root, "index")?;
-    let old_ivf_tree = child_tree(repo, old_index_tree, "ivf-flat-v2")?;
     let old_ivf = repo.find_tree(old_ivf_tree)?;
     let codebook = if equal_vectors(&old_index.centroids, &new_index.search.centroids) {
         blob_oid(&old_ivf, "codebook.bin")?
@@ -234,10 +295,195 @@ pub(crate) fn update_root(
 
     let meta = RootMeta::new_v2(
         config,
-        points.len(),
+        final_point_count,
         IvfConfig {
             shard_bits: SHARD_BITS,
             centroid_count: new_index.search.centroids.len(),
+            training_sample_limit: SAMPLE_LIMIT,
+            training_iterations: TRAINING_ITERATIONS,
+        },
+    );
+    let mut root = repo.treebuilder(Some(&repo.find_tree(previous_root)?))?;
+    root.insert("index", index_builder.write()?, TREE_MODE)?;
+    root.insert("meta.json", repo.blob(&canonical_json(&meta)?)?, BLOB_MODE)?;
+    root.insert("points", points_tree, TREE_MODE)?;
+    Ok(root.write()?)
+}
+
+fn update_root_sample_stable(
+    repo: &Repository,
+    previous_root: Oid,
+    config: &CollectionConfig,
+    final_point_count: usize,
+    changes: &BTreeMap<PointId, PointChange>,
+    old_index_tree: Oid,
+    old_ivf_tree: Oid,
+) -> Result<Oid> {
+    let old_points_tree = root_tree(repo, previous_root, "points")?;
+    let old_ids = child_tree(repo, old_points_tree, "ids")?;
+    let old_payloads = child_tree(repo, old_points_tree, "payloads")?;
+    let old_vectors = child_tree(repo, old_points_tree, "vectors")?;
+    let mut by_shard = BTreeMap::<u16, Vec<(&PointId, &PointChange)>>::new();
+    for (id, change) in changes {
+        by_shard
+            .entry(shard_for_id(id))
+            .or_default()
+            .push((id, change));
+    }
+
+    let ids_tree = repo.find_tree(old_ids)?;
+    let mut old_shards = BTreeMap::new();
+    for shard in by_shard.keys().copied() {
+        let ids_name = format!("{shard:03x}.bin");
+        let points = if ids_tree.get_name(&ids_name).is_some() {
+            read_shard(
+                repo,
+                old_ids,
+                old_payloads,
+                old_vectors,
+                shard,
+                config.dimension,
+            )?
+        } else {
+            Vec::new()
+        };
+        old_shards.insert(shard, points);
+    }
+
+    let old_index = read_index(
+        repo,
+        previous_root,
+        &crate::root::read_meta(repo, previous_root)?,
+    )?;
+    let mut old_assignments = old_shards
+        .iter()
+        .map(|(&shard, points)| (shard, vec![None; points.len()]))
+        .collect::<BTreeMap<_, _>>();
+    let mut invalid_assignment = false;
+    let mut new_postings = old_index.postings.clone();
+    for (centroid, posting) in new_postings.iter_mut().enumerate() {
+        posting.retain(|&(shard, row)| {
+            if let Some(assignments) = old_assignments.get_mut(&shard) {
+                if let Some(assignment) = assignments.get_mut(row as usize) {
+                    if assignment.replace(centroid).is_some() {
+                        invalid_assignment = true;
+                    }
+                } else {
+                    invalid_assignment = true;
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+    if invalid_assignment {
+        return Err(Error::Corrupt(
+            "format-2 old posting has a duplicate or out-of-range shard row".into(),
+        ));
+    }
+
+    let mut ids_builder = repo.treebuilder(Some(&ids_tree))?;
+    let mut payloads_builder = repo.treebuilder(Some(&repo.find_tree(old_payloads)?))?;
+    let mut vectors_builder = repo.treebuilder(Some(&repo.find_tree(old_vectors)?))?;
+    for (shard, shard_changes) in by_shard {
+        let ids_name = format!("{shard:03x}.bin");
+        let vectors_name = format!("{shard:03x}.f32le");
+        let old_points = old_shards
+            .remove(&shard)
+            .expect("changed shard was decoded");
+        let mut shard_changes = shard_changes
+            .into_iter()
+            .map(|(id, change)| (id.clone(), change))
+            .collect::<BTreeMap<_, _>>();
+        let assignments = old_assignments
+            .remove(&shard)
+            .expect("changed shard assignments were initialized");
+        if assignments.len() != old_points.len() || assignments.iter().any(Option::is_none) {
+            return Err(Error::Corrupt(
+                "format-2 points and old postings have different shard rows".into(),
+            ));
+        }
+        let mut new_points = Vec::with_capacity(old_points.len());
+        for (row, old_point) in old_points.into_iter().enumerate() {
+            let old_centroid = assignments[row].expect("validated old assignment");
+            let (point, centroid) = if let Some(change) = shard_changes.remove(&old_point.id) {
+                let point = change.new.as_ref().ok_or_else(|| {
+                    Error::Corrupt("sample-stable replacement is missing its new point".into())
+                })?;
+                let centroid = if vector_bits_equal(&old_point.vector, &point.vector) {
+                    old_centroid
+                } else {
+                    closest_centroid(&point.vector, &old_index.centroids)
+                };
+                (point.clone(), centroid)
+            } else {
+                (old_point, old_centroid)
+            };
+            new_postings[centroid].push((
+                shard,
+                u32::try_from(row)
+                    .map_err(|_| Error::Invalid("format-2 shard exceeds u32 rows".into()))?,
+            ));
+            new_points.push(point);
+        }
+        if !shard_changes.is_empty() {
+            return Err(Error::Corrupt(
+                "sample-stable replacement references a missing point".into(),
+            ));
+        }
+        let point_refs = new_points.iter().collect::<Vec<_>>();
+        if point_refs.is_empty() {
+            ids_builder.remove(&ids_name)?;
+            payloads_builder.remove(&ids_name)?;
+            vectors_builder.remove(&vectors_name)?;
+        } else {
+            ids_builder.insert(&ids_name, repo.blob(&encode_ids(&point_refs)?)?, BLOB_MODE)?;
+            payloads_builder.insert(
+                &ids_name,
+                repo.blob(&encode_payloads(&point_refs)?)?,
+                BLOB_MODE,
+            )?;
+            vectors_builder.insert(
+                &vectors_name,
+                repo.blob(&encode_vectors(&point_refs, config.dimension)?)?,
+                BLOB_MODE,
+            )?;
+        }
+    }
+    for posting in &mut new_postings {
+        posting.sort_unstable();
+    }
+
+    let mut points_builder = repo.treebuilder(Some(&repo.find_tree(old_points_tree)?))?;
+    points_builder.insert("ids", ids_builder.write()?, TREE_MODE)?;
+    points_builder.insert("payloads", payloads_builder.write()?, TREE_MODE)?;
+    points_builder.insert("vectors", vectors_builder.write()?, TREE_MODE)?;
+    let points_tree = points_builder.write()?;
+
+    let old_ivf = repo.find_tree(old_ivf_tree)?;
+    let old_postings_tree = child_tree(repo, old_ivf_tree, "postings")?;
+    let mut postings_builder = repo.treebuilder(Some(&repo.find_tree(old_postings_tree)?))?;
+    for (centroid, (old, new)) in old_index.postings.iter().zip(&new_postings).enumerate() {
+        if old != new {
+            postings_builder.insert(
+                format!("{centroid:04x}.bin"),
+                repo.blob(&encode_posting(new)?)?,
+                BLOB_MODE,
+            )?;
+        }
+    }
+    let mut ivf_builder = repo.treebuilder(Some(&old_ivf))?;
+    ivf_builder.insert("postings", postings_builder.write()?, TREE_MODE)?;
+    let mut index_builder = repo.treebuilder(Some(&repo.find_tree(old_index_tree)?))?;
+    index_builder.insert("ivf-flat-v2", ivf_builder.write()?, TREE_MODE)?;
+
+    let meta = RootMeta::new_v2(
+        config,
+        final_point_count,
+        IvfConfig {
+            shard_bits: SHARD_BITS,
+            centroid_count: old_index.centroids.len(),
             training_sample_limit: SAMPLE_LIMIT,
             training_iterations: TRAINING_ITERATIONS,
         },
@@ -718,6 +964,36 @@ fn encode_sample(sample: &[&Point]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn vector_hash(vector: &[f32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for component in vector {
+        hasher.update(component.to_bits().to_le_bytes());
+    }
+    hasher.finalize().into()
+}
+
+fn vector_bits_equal(left: &[f32], right: &[f32]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.to_bits() == right.to_bits())
+}
+
+fn sample_vectors_unchanged(
+    sample: &[SampleEntry],
+    changes: &BTreeMap<PointId, PointChange>,
+) -> bool {
+    sample.iter().all(|entry| {
+        changes.get(&entry.id).is_none_or(|change| {
+            change
+                .new
+                .as_ref()
+                .is_some_and(|point| entry.vector_hash == vector_hash(&point.vector))
+        })
+    })
+}
+
 fn encode_posting(posting: &[(u16, u32)]) -> Result<Vec<u8>> {
     let count = u32::try_from(posting.len())
         .map_err(|_| Error::Invalid("posting exceeds u32 rows".into()))?;
@@ -978,6 +1254,10 @@ fn decode_codebook(bytes: &[u8], expected_dimension: usize) -> Result<Vec<Vec<f3
 }
 
 fn validate_sample(bytes: &[u8], expected_count: usize) -> Result<()> {
+    decode_sample(bytes, expected_count).map(|_| ())
+}
+
+fn decode_sample(bytes: &[u8], expected_count: usize) -> Result<Vec<SampleEntry>> {
     if bytes.len() < 12 || &bytes[..8] != SAMPLE_MAGIC {
         return Err(Error::Corrupt("invalid format-2 sample header".into()));
     }
@@ -988,6 +1268,7 @@ fn validate_sample(bytes: &[u8], expected_count: usize) -> Result<()> {
         ));
     }
     let mut cursor = 12_usize;
+    let mut sample = Vec::with_capacity(count);
     for _ in 0..count {
         let length_end = cursor
             .checked_add(4)
@@ -1006,15 +1287,31 @@ fn validate_sample(bytes: &[u8], expected_count: usize) -> Result<()> {
         if row_end > bytes.len() || length < 2 {
             return Err(Error::Corrupt("truncated format-2 sample row".into()));
         }
-        let id = &bytes[cursor..id_end];
-        match &id[..2] {
-            b"s\0" => {
-                std::str::from_utf8(&id[2..])
-                    .map_err(|_| Error::Corrupt("format-2 sample string ID is not UTF-8".into()))?;
-            }
-            b"u\0" if id.len() == 10 => {}
+        let canonical_id = &bytes[cursor..id_end];
+        let id = match &canonical_id[..2] {
+            b"s\0" => PointId::String(
+                std::str::from_utf8(&canonical_id[2..])
+                    .map_err(|_| Error::Corrupt("format-2 sample string ID is not UTF-8".into()))?
+                    .to_owned(),
+            ),
+            b"u\0" if canonical_id.len() == 10 => PointId::UInt(u64::from_be_bytes(
+                canonical_id[2..]
+                    .try_into()
+                    .expect("checked canonical uint ID length"),
+            )),
             _ => return Err(Error::Corrupt("invalid format-2 sample ID".into())),
+        };
+        let vector_hash = bytes[id_end..row_end]
+            .try_into()
+            .expect("checked sample vector hash length");
+        if sample.last().is_some_and(|previous: &SampleEntry| {
+            (id_digest(&previous.id), &previous.id) >= (id_digest(&id), &id)
+        }) {
+            return Err(Error::Corrupt(
+                "format-2 sample IDs are not in canonical order".into(),
+            ));
         }
+        sample.push(SampleEntry { id, vector_hash });
         cursor = row_end;
     }
     if cursor != bytes.len() {
@@ -1022,7 +1319,7 @@ fn validate_sample(bytes: &[u8], expected_count: usize) -> Result<()> {
             "format-2 sample contains trailing bytes".into(),
         ));
     }
-    Ok(())
+    Ok(sample)
 }
 
 fn decode_posting(bytes: &[u8]) -> Result<Vec<(u16, u32)>> {
@@ -1244,6 +1541,7 @@ fn compare_ranked(left: &RankedPoint, right: &RankedPoint) -> Ordering {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeSet;
     use tempfile::TempDir;
 
     fn point(id: impl Into<PointId>, vector: [f32; 2]) -> Point {
@@ -1317,5 +1615,70 @@ mod tests {
         let meta = crate::root::read_meta(&left, left_root).unwrap();
         assert_eq!(meta.format_version, 2);
         assert!(validate_root(&left, left_root, &meta, true).unwrap().valid);
+    }
+
+    #[test]
+    fn sample_stable_replacement_matches_a_clean_rebuild() {
+        let temp = TempDir::new().unwrap();
+        let repo = Repository::init_bare(temp.path()).unwrap();
+        let config = CollectionConfig::new(2);
+        let mut points = (0..=SAMPLE_LIMIT)
+            .map(|index| {
+                let point = point(
+                    index as u64,
+                    [index as f32 + 1.0, ((index * 17) % 101) as f32 - 50.0],
+                );
+                (point.id.clone(), point)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let sampled = canonical_index(&points)
+            .unwrap()
+            .sample
+            .into_iter()
+            .map(|point| point.id.clone())
+            .collect::<BTreeSet<_>>();
+        let id = points
+            .keys()
+            .find(|id| !sampled.contains(*id))
+            .expect("one point must be outside the bounded sample")
+            .clone();
+        let old = points.get(&id).unwrap().clone();
+        let mut new = old.clone();
+        new.vector[1] += 0.25;
+        let root = build_root(&repo, &config, &points).unwrap();
+        let changes = BTreeMap::from([(
+            id.clone(),
+            PointChange {
+                old: Some(old),
+                new: Some(new.clone()),
+            },
+        )]);
+        let incremental = update_root(&repo, root, &config, &changes).unwrap();
+        points.insert(id, new);
+        let clean = build_root(&repo, &config, &points).unwrap();
+        assert_eq!(incremental, clean);
+
+        let old_ivf = child_tree(
+            &repo,
+            root_tree(&repo, root, "index").unwrap(),
+            "ivf-flat-v2",
+        )
+        .unwrap();
+        let new_ivf = child_tree(
+            &repo,
+            root_tree(&repo, incremental, "index").unwrap(),
+            "ivf-flat-v2",
+        )
+        .unwrap();
+        let old_ivf = repo.find_tree(old_ivf).unwrap();
+        let new_ivf = repo.find_tree(new_ivf).unwrap();
+        assert_eq!(
+            blob_oid(&old_ivf, "sample.bin").unwrap(),
+            blob_oid(&new_ivf, "sample.bin").unwrap()
+        );
+        assert_eq!(
+            blob_oid(&old_ivf, "codebook.bin").unwrap(),
+            blob_oid(&new_ivf, "codebook.bin").unwrap()
+        );
     }
 }

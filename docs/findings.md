@@ -17,10 +17,13 @@ case. Recall improves at k=1/10/100 and exact p50 improves slightly. This clears
 the documented no-regression gate, so there is no opt-in v2 path: all new roots
 use v2. Canonical v1 roots remain readable, validatable, and mutable.
 
-Relative to same-run LanceDB 0.34.0, v2 now builds slightly faster, uses about
-half the bytes per point, uses less peak memory, has near-equal exact latency,
-higher ANN recall, and higher concurrency-4 ANN throughput. The remaining gaps
-are 2.4x slower single-query ANN latency and much slower Git-native mutations.
+Relative to same-run LanceDB 0.34.0, the v0.2 candidate has near-equal build
+time, uses about half the bytes per point, uses less peak memory, has higher ANN
+recall, and delivers 41% higher concurrency-4 ANN throughput. The remaining
+gaps are 1.25x exact latency, 2.28x single-query ANN latency, and much slower
+Git-native mutations. Interleaved baseline/candidate profiles show that the
+v0.2 row lookup lowers warm ANN p50 by 17.8% on x86_64 and 45.1% on arm64, while
+sample-stable 1% replacement upserts improve by 64.2% and 59.9% respectively.
 Full evidence and artifact hashes are in
 [`docs/benchmarks/lancedb-performance.md`](benchmarks/lancedb-performance.md).
 

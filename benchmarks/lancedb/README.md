@@ -33,6 +33,10 @@ iteration; it is not sufficient for broad performance claims.
 Payloads contain `selectivity_bucket = uint64_id modulo 1000`, giving exact
 50%, 10%, 1%, and 0.1% filters whenever the point count is a multiple of 1,000.
 Mutation batches deterministically alter the first vector component by 0.001.
+The retained-root profiler also provides `mutate-sample-stable`, which chooses
+replacement IDs outside the bounded 8,192-point training sample. This isolates
+the incremental codebook-reuse path without changing the standard workload or
+silently relabeling its usually sample-changing mutation batches.
 The workload schema is version 1 and is independent of the database's persisted
 format version. The same harness can therefore compare format revisions without
 changing its dataset, queries, mutations, or correctness oracle.
