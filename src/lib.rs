@@ -1,56 +1,39 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-//! A deterministic, Git-native embedded vector database.
+//! A local vector database stored entirely in Git.
 //!
-//! `git-vdb` stores vectors, payloads, metadata, and search indexes as immutable
-//! Git objects. A canonical Git tree identifies the complete database state;
-//! commits and refs are an optional naming and history layer above that state.
-//! Equivalent configuration and points therefore produce the same root tree,
-//! independent of insertion order, repository path, history, or timestamps.
-//!
-//! Two APIs expose the same storage engine:
-//!
-//! - [`SnapshotEngine`] works directly with immutable root IDs and never creates
-//!   commits or updates refs.
-//! - [`Database`] and [`Collection`] manage named collections under
-//!   `refs/git-vdb/collections/*`, including history and compare-and-swap writes.
-//!
-//! # Immutable snapshot example
+//! The common path opens one directory, selects a collection, writes points,
+//! and searches. A missing database and collection are created on first write,
+//! and vector dimensions are inferred from that write.
 //!
 //! ```
-//! use git_vdb::{CollectionConfig, Point, Query, SnapshotEngine};
+//! use git_vdb::{open, Point};
 //!
 //! # fn main() -> git_vdb::Result<()> {
-//! let engine = SnapshotEngine::ephemeral()?;
-//! let snapshot = engine.build(
-//!     CollectionConfig::new(2),
-//!     vec![
-//!         Point::new("east", [1.0, 0.0]),
-//!         Point::new("north", [0.0, 1.0]),
-//!     ],
-//! )?;
-//!
-//! let result = snapshot.query(Query::exact([0.9, 0.1], 1))?;
-//! assert_eq!(result.points[0].id.to_string(), "east");
-//! assert_eq!(result.root, snapshot.root());
+//! # let temporary = tempfile::TempDir::new()?;
+//! let db = open(temporary.path().join("vectors.git"))?;
+//! let docs = db.collection("docs");
+//! docs.upsert([
+//!     Point::new("east", [1.0, 0.0]),
+//!     Point::new("north", [0.0, 1.0]),
+//! ])?;
+//! let hits = docs.search([0.9, 0.1], 1)?;
+//! assert_eq!(hits[0].id.to_string(), "east");
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! # Semantics and compatibility
+//! Use [`Store`] and [`CollectionHandle`] for ordinary embedded use. Use
+//! [`Database`] and [`Collection`] for explicitly configured collections,
+//! filters, detailed query statistics, history, and compare-and-swap writes.
+//! Use [`SnapshotEngine`] when another system owns naming and persistence.
 //!
-//! Exact cosine search scores every eligible point. Approximate search uses the
-//! root's deterministic IVF-flat index and may omit globally better points when
-//! probe or candidate limits are exhausted; [`QueryResult::stats`] reports the
-//! work performed. Reads and validation never advance refs. Named writes create
-//! immutable objects first and then atomically compare-and-swap the collection
-//! ref, so [`Error::StaleRoot`] cannot silently overwrite a concurrent writer.
-//!
-//! The crate's semantic version and its persisted [`mod@format`] version are
-//! separate compatibility boundaries. New roots use format version 2; existing
-//! format-version-1 roots remain readable and canonical regardless of physical
-//! Git packing.
+//! Equivalent configuration and points produce the same canonical Git root,
+//! independent of insertion order, repository path, history, or timestamps.
+//! The crate's semantic version and persisted [`mod@format`] version are
+//! separate compatibility boundaries; new roots use format version 2 and
+//! format-version-1 roots remain readable and mutable.
 
 pub mod adapter;
 mod codec;
@@ -72,6 +55,29 @@ pub mod format_v1 {}
 /// Design notes for immutable root snapshots and named collection history.
 #[doc = include_str!("../docs/snapshots.md")]
 pub mod snapshots {}
+
+/// Task-oriented guides whose Rust examples are checked as doctests.
+pub mod guides {
+    /// Create and query a persistent database.
+    #[doc = include_str!("../docs/quickstart.md")]
+    pub mod quickstart {}
+
+    /// Safely create, reopen, and reuse a database.
+    #[doc = include_str!("../docs/persistence.md")]
+    pub mod persistence {}
+
+    /// Filter metadata through the detailed query API.
+    #[doc = include_str!("../docs/filtering.md")]
+    pub mod filtering {}
+
+    /// Read collection history and transport refs with Git.
+    #[doc = include_str!("../docs/history.md")]
+    pub mod history {}
+
+    /// Keep embedding-model identities consistent.
+    #[doc = include_str!("../docs/embeddings.md")]
+    pub mod embeddings {}
+}
 
 pub use adapter::{Collection, Database};
 pub use model::{

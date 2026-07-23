@@ -1,0 +1,17 @@
+# git-vdb documentation map
+
+git-vdb is an embedded vector database stored entirely in Git.
+
+- README.md: install and shortest Rust/CLI path
+- docs/quickstart.md: first persistent database and query
+- docs/persistence.md: reopen and safe path behavior
+- docs/filtering.md: metadata and detailed query API
+- docs/history.md: immutable history and Git transport
+- docs/embeddings.md: embedding-model identity and text status
+- docs/snapshots.md: advanced immutable snapshot lifecycle
+- docs/format-v2.md: normative current persisted format
+- docs/format.md: legacy format-v1 compatibility
+- https://docs.rs/git-vdb: complete Rust API reference
+
+Preferred API: git_vdb::open -> Store::collection -> upsert/search.
+Advanced API: Database, Collection, SnapshotEngine, Query, and Filter.

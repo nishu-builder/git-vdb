@@ -85,7 +85,7 @@ reads, validation, and tuning controls remain available.
 
 ## Goals
 
-- [ ] A persistent vector search quickstart is no more than 15 meaningful Rust
+- [x] A persistent vector search quickstart is no more than 15 meaningful Rust
       lines and mentions no Git or ANN implementation concepts.
 - [x] `git_vdb::open(path)` safely opens or creates a local database.
 - [x] The high-level collection handle creates a missing collection on its first
@@ -99,9 +99,9 @@ reads, validation, and tuning controls remain available.
       request-structure boilerplate.
 - [x] The CLI can reach a first persisted query without explicit `init`,
       `collection create`, dimension flags, or temporary query-vector files.
-- [ ] README and rustdoc lead with the high-level persistent API; snapshots,
+- [x] README and rustdoc lead with the high-level persistent API; snapshots,
       roots, format documents, and index tuning are presented as advanced topics.
-- [ ] Quickstart, persistence, filtering, and history examples are executable in
+- [x] Quickstart, persistence, filtering, and history examples are executable in
       CI and use the same API shown in the documentation.
 - [ ] An optional first-party text layer supports document upsert and text search,
       persists an embedding-model identity, and keeps model dependencies out of
@@ -355,6 +355,15 @@ CLI/Git transport test passes unchanged through compatibility aliases.
 - Add task-oriented guides, agent documentation map, and small examples.
 - Compile/test every public example and deny rustdoc warnings.
 
+**Evidence (2026-07-23):** README and crate-level rustdoc now lead with the same
+10-line persistent open/collection/upsert/search path. The README is limited to
+installation, Rust and CLI first use, four Git-native benefits, guide links, and
+an advanced/internals boundary. Task guides cover quickstart, persistence,
+filtering, history/transport, and embeddings; `llms.txt` gives coding agents a
+compact route map. Four matching examples compile under all-target tests and run
+successfully as binaries. The four Rust guide snippets plus crate quickstart run
+as five passing doctests, and rustdoc passes with warnings denied.
+
 ### Rung 5: Text-layer spike and implementation
 
 - Evaluate the optional-feature and companion-crate approaches.
@@ -405,10 +414,11 @@ integration contract.
 
 ## Open Questions
 
-1. Should the high-level facade types be named `Store` and `CollectionHandle`,
-   or should rustdoc expose only their methods and use shorter names?
-2. Should `search` always include payloads, or should the facade return a smaller
-   `Hit` containing ID, score, and metadata while vectors remain opt-in?
+1. Resolved: keep `Store` and `CollectionHandle`. Call sites rely on inference,
+   while the explicit names make rustdoc navigation unambiguous.
+2. Resolved: `search` returns existing `ScoredPoint` values with payloads and no
+   stored vectors. This avoids another result type while making metadata useful
+   by default; detailed `query` retains all opt-in controls and statistics.
 3. Resolved: use `--db` in first-use documentation because it names the user
    concept; retain `--repo` as a visible compatibility alias because Git-aware
    workflows still benefit from that precision.
