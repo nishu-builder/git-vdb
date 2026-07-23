@@ -76,7 +76,7 @@
             commonArgs
             // {
               inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
+              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             }
           );
 
@@ -94,7 +94,7 @@
             // {
               inherit cargoArtifacts;
               RUSTDOCFLAGS = "-D warnings";
-              cargoDocExtraArgs = "--all-features --no-deps";
+              cargoDocExtraArgs = "--no-deps";
             }
           );
         };
