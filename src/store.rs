@@ -80,6 +80,14 @@ impl CollectionHandle {
     /// The first write infers the collection dimension from its points. All
     /// vectors in that batch must be nonempty and have the same dimension.
     pub fn upsert(&self, points: impl IntoIterator<Item = Point>) -> Result<WriteResult> {
+        self.upsert_with_vector_space(points, None)
+    }
+
+    pub(crate) fn upsert_with_vector_space(
+        &self,
+        points: impl IntoIterator<Item = Point>,
+        vector_space: Option<&str>,
+    ) -> Result<WriteResult> {
         let points: Vec<Point> = points.into_iter().collect();
         let dimension = inferred_dimension(&points)?;
 
@@ -87,10 +95,9 @@ impl CollectionHandle {
             let collection = match self.database.collection(&self.name) {
                 Ok(collection) => collection,
                 Err(Error::CollectionNotFound(_)) => {
-                    match self
-                        .database
-                        .create_collection(&self.name, CollectionConfig::new(dimension))
-                    {
+                    let mut config = CollectionConfig::new(dimension);
+                    config.vector_space = vector_space.map(str::to_owned);
+                    match self.database.create_collection(&self.name, config) {
                         Ok(collection) => collection,
                         Err(Error::CollectionExists(_)) => {
                             thread::yield_now();
@@ -105,6 +112,16 @@ impl CollectionHandle {
                 }
                 Err(error) => return Err(error),
             };
+
+            if let Some(vector_space) = vector_space {
+                let actual = collection.info()?.config.vector_space;
+                if actual.as_deref() != Some(vector_space) {
+                    return Err(Error::Invalid(format!(
+                        "collection {:?} uses vector space {:?}, expected {:?}",
+                        self.name, actual, vector_space
+                    )));
+                }
+            }
 
             match collection.upsert(points.clone()) {
                 Ok(result) => return Ok(result),

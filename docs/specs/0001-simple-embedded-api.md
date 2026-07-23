@@ -103,7 +103,7 @@ reads, validation, and tuning controls remain available.
       roots, format documents, and index tuning are presented as advanced topics.
 - [x] Quickstart, persistence, filtering, and history examples are executable in
       CI and use the same API shown in the documentation.
-- [ ] An optional first-party text layer supports document upsert and text search,
+- [x] An optional first-party text layer supports document upsert and text search,
       persists an embedding-model identity, and keeps model dependencies out of
       the default core build.
 - [x] Existing format-v2 roots remain canonical, format-v1 roots remain readable
@@ -371,6 +371,18 @@ as five passing doctests, and rustdoc passes with warnings denied.
   default only if dependency, MSRV, reproducibility, and packaging gates pass.
 - Add offline tests with a deterministic fake embedder regardless of provider.
 
+**Evidence (2026-07-23):** a clean temporary-crate spike of `fastembed 5.17.3`
+with default features disabled failed `cargo +1.87.0 check`: its exact
+`ort 2.0.0-rc.12` dependency and `ort-sys` require Rust 1.88. This satisfies the
+documented provider stop, so no model runtime or network dependency was added.
+The provider-independent `Embedder`, `Document`, and `TextCollection` API ships
+in the core crate without new dependencies. It embeds document batches and text
+queries, retains source text in payloads, and persists/rechecks a nonempty model
+identity as `vector_space`. Offline fake-embedder tests prove document search,
+metadata retention, model mismatch rejection, and malformed-output rejection
+without creating a collection. The guide is a doctest and has a matching
+executable example.
+
 ### Rung 6: Release-quality verification
 
 - Run formatting, all tests, clippy with warnings denied, rustdoc with warnings
@@ -422,8 +434,10 @@ integration contract.
 3. Resolved: use `--db` in first-use documentation because it names the user
    concept; retain `--repo` as a visible compatibility alias because Git-aware
    workflows still benefit from that precision.
-4. Does an optional local embedding provider meet the MSRV and platform gates,
-   or should the first text release stop at a provider-independent adapter?
+4. Resolved: stop this release at the provider-independent adapter. The current
+   leading local candidate fails the Rust 1.87 gate through `ort`; reconsider a
+   bundled provider only when all MSRV, platform, offline, and packaging gates
+   pass without affecting the default vector build.
 
 These questions may be resolved during their relevant rung. Decisions must be
 recorded here before the goal is marked implemented.

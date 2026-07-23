@@ -43,6 +43,7 @@ mod root;
 mod root_v2;
 pub mod snapshot;
 mod store;
+pub mod text;
 
 /// The normative persisted format-version-2 specification.
 #[doc = include_str!("../docs/format-v2.md")]
@@ -88,6 +89,7 @@ pub use model::{
 };
 pub use snapshot::{Snapshot, SnapshotEngine};
 pub use store::{open, CollectionHandle, Store};
+pub use text::{Document, Embedder, TextCollection};
 
 use thiserror::Error;
 
