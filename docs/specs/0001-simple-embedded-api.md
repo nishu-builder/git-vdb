@@ -1,6 +1,6 @@
 # Simple Embedded API and Documentation
 
-> **Status:** Approved
+> **Status:** Implemented
 >
 > **Author:** Codex, for the project maintainer
 >
@@ -109,7 +109,7 @@ reads, validation, and tuning controls remain available.
 - [x] Existing format-v2 roots remain canonical, format-v1 roots remain readable
       and mutable, and the high-level facade produces the same roots as the
       existing APIs for equivalent inputs.
-- [ ] The final crate archive, rustdoc, MSRV, Nix, CLI smoke tests, and all current
+- [x] The final crate archive, rustdoc, MSRV, Nix, CLI smoke tests, and all current
       correctness tests pass with no unrelated work included.
 
 ## Non-Goals
@@ -391,6 +391,16 @@ executable example.
 - Confirm the archive contains only intended user documentation and sources.
 - Update the changelog and spec status only after every completion criterion is
   evidenced.
+
+**Evidence (2026-07-23):** formatting, 34 unit/integration tests, all example
+targets, denied-warning clippy, denied-warning rustdoc, six doctests, Rust 1.87
+library/doctest checks, the clean-directory CLI smoke path, and all five native
+Nix checks pass. The Nix source filter was extended to include task guides and
+`llms.txt`, fixing a packaging-only missing-include failure found by this gate.
+`cargo publish --dry-run --locked` packages 45 intended files (about 103 KiB
+compressed), compiles the generated archive, and stops before upload as expected.
+The final audit worktree is clean; the five implementation rungs are isolated in
+preceding commits.
 
 ## Stop Conditions
 

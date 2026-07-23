@@ -7,6 +7,27 @@ continuing to read and write the same canonical format version.
 
 ## [Unreleased]
 
+### Added
+
+- added a small persistent `Store` facade that safely opens or creates a local
+  database, infers collection dimensions on first upsert, and exposes direct
+  search, retrieval, deletion, count, and peek operations;
+- added a provider-independent text collection that embeds documents and text
+  queries through a user-supplied `Embedder` while persisting and checking the
+  embedding-model identity;
+- added executable quickstart, persistence, filtering, history, and text examples
+  plus task-oriented guides and an agent-facing documentation map.
+
+### Changed
+
+- made the persistent open/collection/upsert/search workflow the README and
+  crate-rustdoc front door while retaining the detailed database and immutable
+  snapshot APIs;
+- simplified CLI first use with safe database auto-creation, inferred collection
+  dimensions, positional JSONL or stdin, inline points and vectors, and the
+  primary `--db` and `search` spellings; retained `--repo`, `--input`, and
+  `query` compatibility aliases.
+
 ## [0.2.0] - 2026-07-23
 
 ### Changed

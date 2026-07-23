@@ -12,7 +12,7 @@ use std::str::FromStr;
 #[command(name = "git-vdb", version, about)]
 struct Cli {
     /// Database directory. Overrides GIT_VDB_REPO.
-    #[arg(long = "db", alias = "repo", global = true)]
+    #[arg(long = "db", visible_alias = "repo", global = true)]
     db: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,

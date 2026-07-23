@@ -37,12 +37,9 @@
               relativePath = pkgs.lib.removePrefix (toString ./.) (toString path);
             in
             craneLib.filterCargoSources path type
-            || builtins.elem relativePath [
-              "/docs"
-              "/docs/format.md"
-              "/docs/format-v2.md"
-              "/docs/snapshots.md"
-            ];
+            || relativePath == "/docs"
+            || pkgs.lib.hasPrefix "/docs/" relativePath
+            || relativePath == "/llms.txt";
         };
 
         commonArgs = {
