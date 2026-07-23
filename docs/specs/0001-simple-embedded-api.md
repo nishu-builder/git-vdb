@@ -87,15 +87,15 @@ reads, validation, and tuning controls remain available.
 
 - [ ] A persistent vector search quickstart is no more than 15 meaningful Rust
       lines and mentions no Git or ANN implementation concepts.
-- [ ] `git_vdb::open(path)` safely opens or creates a local database.
-- [ ] The high-level collection handle creates a missing collection on its first
+- [x] `git_vdb::open(path)` safely opens or creates a local database.
+- [x] The high-level collection handle creates a missing collection on its first
       upsert and deterministically infers vector dimension.
-- [ ] Concurrent first writes either converge through normal upsert semantics or
+- [x] Concurrent first writes either converge through normal upsert semantics or
       return a clear dimension/configuration conflict; they never overwrite a
       collection ref silently.
-- [ ] `search(vector, limit)` returns winners directly, includes payloads, and
+- [x] `search(vector, limit)` returns winners directly, includes payloads, and
       preserves the existing automatic exact/approximate selection.
-- [ ] Common helpers cover ID retrieval, ID deletion, count, and peek without
+- [x] Common helpers cover ID retrieval, ID deletion, count, and peek without
       request-structure boilerplate.
 - [ ] The CLI can reach a first persisted query without explicit `init`,
       `collection create`, dimension flags, or temporary query-vector files.
@@ -106,7 +106,7 @@ reads, validation, and tuning controls remain available.
 - [ ] An optional first-party text layer supports document upsert and text search,
       persists an embedding-model identity, and keeps model dependencies out of
       the default core build.
-- [ ] Existing format-v2 roots remain canonical, format-v1 roots remain readable
+- [x] Existing format-v2 roots remain canonical, format-v1 roots remain readable
       and mutable, and the high-level facade produces the same roots as the
       existing APIs for equivalent inputs.
 - [ ] The final crate archive, rustdoc, MSRV, Nix, CLI smoke tests, and all current
@@ -310,6 +310,12 @@ root object IDs.
 - Stop if safe lazy creation requires a format change; revise the design before
   touching persistence.
 
+**Evidence (2026-07-23):** `tests/store.rs` exercises the proposed persistent
+open/collection/upsert/search call sequence. Inspection and a differential test
+confirmed that the facade delegates to the existing builder and produces the
+same format-v2 root as an explicitly configured advanced collection. No format
+change is required.
+
 ### Rung 2: Core facade
 
 - Implement `open`, `Store`, `CollectionHandle`, lazy first upsert, search, and
@@ -317,6 +323,15 @@ root object IDs.
 - Prove equal roots against `Database`/`Collection` construction.
 - Test missing reads, invalid dimensions, empty batches, existing repositories,
   nonempty non-repository directories, and first-write races.
+
+**Evidence (2026-07-23):** the additive `Store` and `CollectionHandle` facade
+implements safe open-or-create, inferred first writes, payload-returning search,
+ID retrieval/deletion, count, peek, and advanced access. Tests cover missing
+reads, empty and mixed dimensions, configuration mismatch without ref movement,
+bare and non-bare repositories, preservation of occupied directories, reopening,
+canonical-root equality, and concurrent first writers. The race test passed ten
+consecutive runs. Full tests, clippy with denied warnings, denied-warning
+rustdoc, and Rust 1.87 library/doctest checks pass.
 
 ### Rung 3: CLI first-use path
 

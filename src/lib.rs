@@ -59,6 +59,7 @@ pub mod model;
 mod root;
 mod root_v2;
 pub mod snapshot;
+mod store;
 
 /// The normative persisted format-version-2 specification.
 #[doc = include_str!("../docs/format-v2.md")]
@@ -80,6 +81,7 @@ pub use model::{
     Record, ScoredPoint, SnapshotInfo, SnapshotMutation, ValidationReport, WriteResult,
 };
 pub use snapshot::{Snapshot, SnapshotEngine};
+pub use store::{open, CollectionHandle, Store};
 
 use thiserror::Error;
 

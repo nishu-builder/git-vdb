@@ -137,6 +137,22 @@ impl Point {
         self.payload = payload;
         self
     }
+
+    /// Serializes object-shaped metadata as the point payload.
+    ///
+    /// Arrays, scalars, and null are rejected because persisted point payloads
+    /// are always JSON objects.
+    pub fn with_metadata(mut self, metadata: impl Serialize) -> crate::Result<Self> {
+        match serde_json::to_value(metadata)? {
+            Value::Object(payload) => {
+                self.payload = payload;
+                Ok(self)
+            }
+            _ => Err(crate::Error::Invalid(
+                "point metadata must serialize to a JSON object".into(),
+            )),
+        }
+    }
 }
 
 /// The vector distance used for ranking.
