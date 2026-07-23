@@ -156,6 +156,7 @@ fn cli_outputs_json_and_stock_git_can_transfer_and_maintain_objects() {
     ]));
     let created: Value = serde_json::from_slice(&created.stdout).unwrap();
     assert_eq!(created["point_count"], 0);
+    assert_eq!(created["format_version"], 2);
 
     let input = temp.path().join("points.jsonl");
     fs::write(
@@ -177,6 +178,10 @@ fn cli_outputs_json_and_stock_git_can_transfer_and_maintain_objects() {
 
     let tree = git(&repo, &["ls-tree", "--name-only", root]);
     assert_eq!(tree, "index\nmeta.json\npoints\n");
+    assert_eq!(
+        git(&repo, &["ls-tree", "--name-only", &format!("{root}:index")]),
+        "ivf-flat-v2\n"
+    );
     let ref_before = git(&repo, &["rev-parse", "refs/git-vdb/collections/notes"]);
     let object_count_before = git(&repo, &["count-objects", "-v"]);
     let vector_file = temp.path().join("query.json");

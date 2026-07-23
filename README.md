@@ -78,7 +78,7 @@ commits and compare-and-swap refs. Both layers produce the same canonical roots.
 Core capabilities include:
 
 - typed string and unsigned-integer IDs, dense `f32` vectors, and JSON payloads;
-- exact cosine search and deterministic LSH approximate search;
+- exact cosine search and deterministic IVF-flat approximate search;
 - Boolean payload filters, retrieval, counts, upserts, and deletion;
 - immutable historical reads, diffs, validation, and portable snapshots;
 - bare or non-bare Git repositories with no server or hidden external state.
@@ -89,16 +89,17 @@ query results report the selected mode and work statistics.
 ## Documentation
 
 - [Rust API documentation](https://docs.rs/git-vdb)
-- [Canonical format version 1](docs/format.md)
+- [Canonical format version 2](docs/format-v2.md)
+- [Legacy format version 1](docs/format.md)
 - [Snapshot lifecycle and portability](docs/snapshots.md)
 - [Current limitations and findings](docs/findings.md)
 - [Contributing and validation](CONTRIBUTING.md)
 - [Release process](RELEASING.md)
 - [Security policy](SECURITY.md)
 
-Persisted format version 1 and the crate's Semantic Version are separate
-compatibility boundaries. The normative format specification defines canonical
-bytes, paths, scoring, and ordering.
+Persisted format versions and the crate's Semantic Version are separate
+compatibility boundaries. New roots use version 2; version-1 roots remain
+readable and mutable.
 
 ## Development
 

@@ -33,6 +33,7 @@ fn ref_free_build_apply_and_query_match_the_collection_adapter() {
             ],
         )
         .unwrap();
+    assert_eq!(initial.info().unwrap().format_version, 2);
 
     let repository = git2::Repository::open_bare(object_database.path()).unwrap();
     assert_eq!(repository.references().unwrap().count(), 0);
@@ -115,7 +116,7 @@ fn materialized_directory_preserves_root_and_is_independently_queryable() {
     snapshot.materialize(&directory).unwrap();
     assert!(directory.join("meta.json").is_file());
     assert!(directory.join("points").is_dir());
-    assert!(directory.join("index/lsh-v1").is_dir());
+    assert!(directory.join("index/ivf-flat-v2").is_dir());
     assert!(!directory.join(".git").exists());
 
     let opened = Snapshot::open_directory(&directory).unwrap();

@@ -2,9 +2,9 @@
 
 use crate::filter::matches_filter;
 use crate::root::{
-    build_root, count_root, get_root, query_root_with_cache, read_meta, read_point_by_id,
-    read_stored_points, update_root, validate_config, validate_point, validate_root, PointChange,
-    SearchView,
+    build_root, count_root, get_root, query_root_with_cache, read_all_points, read_meta,
+    read_point_by_id, read_stored_points, update_root, validate_config, validate_point,
+    validate_root, PointChange, SearchView,
 };
 use crate::{
     CollectionConfig, CountResult, Error, GetRequest, GetResult, ObjectId, Point, PointId, Query,
@@ -129,6 +129,9 @@ impl SnapshotEngine {
             .iter()
             .all(|mutation| !matches!(mutation, SnapshotMutation::DeleteFilter { .. }))
         {
+            let v2_points = (meta.format_version() == 2)
+                .then(|| read_all_points(&repo, previous_root))
+                .transpose()?;
             let mut states = BTreeMap::<PointId, (Option<Point>, Option<Point>)>::new();
             let mut upsert_ids = BTreeSet::new();
             for mutation in mutations {
@@ -143,7 +146,10 @@ impl SnapshotEngine {
                             )));
                         }
                         if !states.contains_key(&id) {
-                            let old = read_point_by_id(&repo, previous_root, &id)?;
+                            let old = match &v2_points {
+                                Some(points) => points.get(&id).cloned(),
+                                None => read_point_by_id(&repo, previous_root, &id)?,
+                            };
                             states.insert(id.clone(), (old.clone(), old));
                         }
                         states.get_mut(&id).expect("point state exists").1 = Some(point);
@@ -156,7 +162,10 @@ impl SnapshotEngine {
                         }
                         for id in ids {
                             if !states.contains_key(&id) {
-                                let old = read_point_by_id(&repo, previous_root, &id)?;
+                                let old = match &v2_points {
+                                    Some(points) => points.get(&id).cloned(),
+                                    None => read_point_by_id(&repo, previous_root, &id)?,
+                                };
                                 states.insert(id.clone(), (old.clone(), old));
                             }
                             states.get_mut(&id).expect("point state exists").1 = None;
@@ -349,6 +358,7 @@ impl Snapshot {
         let point_count = count_root(&repo, self.root, None)?.count;
         Ok(SnapshotInfo {
             root: self.root(),
+            format_version: meta.format_version(),
             point_count,
             config: meta.config(),
         })

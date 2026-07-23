@@ -2,14 +2,27 @@
 
 ## Current conclusion
 
-The exact database, immutable Git roots, history, deterministic LSH layout, and
-bounded lazy bucket search are implemented and tested. The version 1 LSH
-defaults are provisional. No 100,000-point production-dimension run has yet
-established recall@10 >= 0.95 while scoring <= 10% of points, so this repository
-does not claim that acceptance target. Random-hyperplane LSH may require too
-many multi-probes for that operating point; the next candidate should be a
-history-independent, deterministically trained IVF-flat format with canonical
-centroid assignment, introduced only as a new format version.
+Format version 2 is the production default. It combines deterministic 64-way
+point sharding with a history-independent IVF-flat index and retains immutable
+Git roots, exact search, history, validation, and explicit query-work bounds.
+The unchanged five-repetition 100,000-point GloVe-25 protocol establishes
+recall@10 of 0.969 while scoring at most 10% of points, exact agreement with the
+independent f64 oracle, complete filtered result counts, and identical roots
+across repetitions and the tested arm64/x86_64 platforms.
+
+Against production format version 1 on the same `m6i.2xlarge`, v2 is 22.0x
+faster to build, 6.3x faster for median approximate queries, 11.3x smaller per
+point, 15.1% lower in median peak RSS, and faster at every 1%/10%/100% mutation
+case. Recall improves at k=1/10/100 and exact p50 improves slightly. This clears
+the documented no-regression gate, so there is no opt-in v2 path: all new roots
+use v2. Canonical v1 roots remain readable, validatable, and mutable.
+
+Relative to same-run LanceDB 0.34.0, v2 now builds slightly faster, uses about
+half the bytes per point, uses less peak memory, has near-equal exact latency,
+higher ANN recall, and higher concurrency-4 ANN throughput. The remaining gaps
+are 2.4x slower single-query ANN latency and much slower Git-native mutations.
+Full evidence and artifact hashes are in
+[`docs/benchmarks/lancedb-performance.md`](benchmarks/lancedb-performance.md).
 
 ## Reproducible harness
 

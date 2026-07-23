@@ -24,6 +24,7 @@ include = [
     "/LICENSE",
     "/SECURITY.md",
     "/docs/format.md",
+    "/docs/format-v2.md",
     "/docs/snapshots.md",
 ]
 

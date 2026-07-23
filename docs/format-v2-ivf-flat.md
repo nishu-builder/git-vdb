@@ -1,8 +1,11 @@
-# Proposed format version 2: deterministic sharded IVF-flat
+# Historical format version 2 proposal: deterministic sharded IVF-flat
 
-Status: design candidate for prototype and review. This document is not a
-normative format specification and does not authorize stable writers to emit
-format version 2.
+Status: implemented and superseded by the normative
+[format-version-2 specification](format-v2.md). This document preserves the
+original design rationale and acceptance plan; proposal details such as the
+12-bit shard candidate and opt-in rollout are historical, not current behavior.
+The production acceptance evidence is in
+[`docs/benchmarks/lancedb-performance.md`](benchmarks/lancedb-performance.md).
 
 ## Motivation and evidence
 
@@ -240,21 +243,17 @@ both loose logical layout and packed/transfer bytes.
 
 ## Compatibility and migration
 
-- Stable collection creation continues to emit format version 1 by default.
-- Prototype version 2 is available only through an explicit experimental API,
-  feature, or standalone benchmark command.
+- Stable collection and snapshot creation now emits format version 2
+  unconditionally; there is no opt-in mode or experimental fork.
 - Readers dispatch on `meta.json.format_version`; version-1 interpretation does
   not change.
-- Conversion reads a specific immutable v1 root and creates a distinct v2 root.
-  It never rewrites the old root. If attached to a named collection, conversion
-  creates an explicit commit and uses the same stale-head compare-and-swap gate.
-- Conversion is a format/history boundary. Root IDs are not expected to match
-  across versions, but exact results and logical points must.
-- Downgrade means an explicit v2-to-v1 conversion to another root, not changing
-  a metadata integer.
-
-Migration policy, long-term v2 read support, and when v2 becomes the default are
-product decisions requiring review after prototype evidence.
+- Existing version-1 roots remain readable, fully validatable, and mutable;
+  mutation preserves version 1 and never rewrites the old root.
+- Root IDs are intentionally different across versions, while exact results and
+  logical point contents retain the same semantics.
+- No bulk conversion or downgrade command is shipped. The repository had no
+  external users when v2 became the default, so a migration surface would add
+  unneeded compatibility complexity; immutable v1 roots remain the fallback.
 
 ## Prototype and acceptance plan
 

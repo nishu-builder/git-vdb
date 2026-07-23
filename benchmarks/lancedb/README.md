@@ -33,8 +33,9 @@ iteration; it is not sufficient for broad performance claims.
 Payloads contain `selectivity_bucket = uint64_id modulo 1000`, giving exact
 50%, 10%, 1%, and 0.1% filters whenever the point count is a multiple of 1,000.
 Mutation batches deterministically alter the first vector component by 0.001.
-The workload schema is version 1 and is independent of the database's normative
-format version 1, which this harness does not change.
+The workload schema is version 1 and is independent of the database's persisted
+format version. The same harness can therefore compare format revisions without
+changing its dataset, queries, mutations, or correctness oracle.
 
 LanceDB uses an IVF-flat index with `round(sqrt(point_count))` partitions,
 clamped to 1 through 256, and 8 probes. `git-vdb` uses the complete index

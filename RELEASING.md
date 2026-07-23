@@ -7,8 +7,9 @@ package contents and generated documentation have been inspected.
 ## Prepare
 
 1. Update `Cargo.toml` and `CHANGELOG.md` to the same Semantic Version.
-2. Keep persisted format-version changes separate and update `docs/format.md`
-   only when the compatibility and migration policy has been approved.
+2. Keep persisted format-version changes separate and update the applicable
+   normative specification under `docs/` only after compatibility and migration
+   policy has been approved.
 3. Run the complete release gates:
 
    ```sh

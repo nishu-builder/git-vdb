@@ -69,7 +69,11 @@ pub(crate) fn decode_id(bytes: &[u8]) -> Result<PointId> {
 }
 
 pub(crate) fn id_hash(id: &PointId) -> String {
-    hex::encode(Sha256::digest(id.canonical_bytes()))
+    hex::encode(id_digest(id))
+}
+
+pub(crate) fn id_digest(id: &PointId) -> [u8; 32] {
+    Sha256::digest(id.canonical_bytes()).into()
 }
 
 pub(crate) fn encode_vector(vector: &[f32]) -> Result<Vec<u8>> {

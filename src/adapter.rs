@@ -216,6 +216,7 @@ impl Collection {
         Ok(CollectionInfo {
             root: snapshot.root.into(),
             name: self.name.clone(),
+            format_version: meta.format_version(),
             point_count: meta.point_count(),
             config: meta.config(),
             read_only: self.historical.is_some(),

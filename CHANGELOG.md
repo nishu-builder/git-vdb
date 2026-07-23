@@ -7,6 +7,17 @@ continuing to read and write the same canonical format version.
 
 ## [Unreleased]
 
+### Changed
+
+- made deterministic sharded IVF-flat format version 2 the sole default for new
+  roots, substantially reducing build, approximate-query, mutation, and storage
+  costs while improving recall and filtered result completeness;
+- retained read, validation, and mutation compatibility for canonical
+  format-version-1 roots;
+- replaced v1-only LSH creation flags with format-neutral query defaults in the
+  CLI, exposed each root's persisted format in collection and snapshot info,
+  and published the normative format-version-2 specification in rustdoc.
+
 ## [0.1.1] - 2026-07-22
 
 ### Changed

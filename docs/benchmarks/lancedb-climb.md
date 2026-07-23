@@ -1,5 +1,9 @@
 # LanceDB climb log
 
+This is the historical format-version-1 climb. The production format-version-2
+graduation and current conclusions are recorded in
+[`lancedb-performance.md`](lancedb-performance.md).
+
 ## Protocol
 
 The maintained harness, dependency lock, workload definitions, and exact

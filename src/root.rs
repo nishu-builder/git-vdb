@@ -13,28 +13,40 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::sync::OnceLock;
 
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION_V1: u32 = 1;
+const FORMAT_VERSION_V2: u32 = 2;
 const TREE_MODE: i32 = 0o040000;
 const BLOB_MODE: i32 = 0o100644;
 
+#[cfg(test)]
 type BucketEntries = BTreeMap<usize, BTreeMap<String, BTreeMap<String, Vec<(String, Oid)>>>>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RootMeta {
-    format_version: u32,
-    point_count: usize,
-    dimension: usize,
-    distance: Distance,
-    vector_space: Option<String>,
-    vector_codec: String,
-    git_object_format: String,
-    index: IndexConfig,
+    pub(crate) format_version: u32,
+    pub(crate) point_count: usize,
+    pub(crate) dimension: usize,
+    pub(crate) distance: Distance,
+    pub(crate) vector_space: Option<String>,
+    pub(crate) vector_codec: String,
+    pub(crate) git_object_format: String,
+    pub(crate) index: IndexConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ivf: Option<IvfConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct IvfConfig {
+    pub(crate) shard_bits: usize,
+    pub(crate) centroid_count: usize,
+    pub(crate) training_sample_limit: usize,
+    pub(crate) training_iterations: usize,
 }
 
 impl RootMeta {
-    fn new(config: &CollectionConfig, point_count: usize) -> Self {
+    fn new_v1(config: &CollectionConfig, point_count: usize) -> Self {
         Self {
-            format_version: FORMAT_VERSION,
+            format_version: FORMAT_VERSION_V1,
             point_count,
             dimension: config.dimension,
             distance: config.distance,
@@ -42,6 +54,21 @@ impl RootMeta {
             vector_codec: "f32le-v1".into(),
             git_object_format: "sha1".into(),
             index: config.index.clone(),
+            ivf: None,
+        }
+    }
+
+    pub(crate) fn new_v2(config: &CollectionConfig, point_count: usize, ivf: IvfConfig) -> Self {
+        Self {
+            format_version: FORMAT_VERSION_V2,
+            point_count,
+            dimension: config.dimension,
+            distance: config.distance,
+            vector_space: config.vector_space.clone(),
+            vector_codec: "f32le-sharded-v2".into(),
+            git_object_format: "sha1".into(),
+            index: config.index.clone(),
+            ivf: Some(ivf),
         }
     }
 
@@ -57,6 +84,10 @@ impl RootMeta {
     pub(crate) fn point_count(&self) -> usize {
         self.point_count
     }
+
+    pub(crate) fn format_version(&self) -> u32 {
+        self.format_version
+    }
 }
 #[derive(Clone, Debug)]
 pub(crate) struct StoredPoint {
@@ -66,8 +97,10 @@ pub(crate) struct StoredPoint {
 
 #[derive(Debug)]
 pub(crate) struct SearchView {
-    points: Vec<Point>,
+    pub(crate) points: Vec<Point>,
     point_trees: OnceLock<Vec<(Oid, usize)>>,
+    v2_rows: OnceLock<BTreeMap<(u16, u32), usize>>,
+    pub(crate) v2_index: OnceLock<crate::root_v2::V2SearchIndex>,
 }
 
 impl SearchView {
@@ -75,7 +108,46 @@ impl SearchView {
         Self {
             points,
             point_trees: OnceLock::new(),
+            v2_rows: OnceLock::new(),
+            v2_index: OnceLock::new(),
         }
+    }
+
+    pub(crate) fn point_for_v2_row(&self, shard: u16, row: u32) -> Result<&Point> {
+        if self.v2_rows.get().is_none() {
+            let mut grouped = BTreeMap::<u16, Vec<(PointId, usize)>>::new();
+            for (index, point) in self.points.iter().enumerate() {
+                let shard = crate::root_v2::shard_for_id(&point.id);
+                grouped
+                    .entry(shard)
+                    .or_default()
+                    .push((point.id.clone(), index));
+            }
+            let mut rows = BTreeMap::new();
+            for (shard, mut points) in grouped {
+                points.sort_by(|left, right| left.0.cmp(&right.0));
+                for (row, (_, index)) in points.into_iter().enumerate() {
+                    rows.insert(
+                        (
+                            shard,
+                            u32::try_from(row).map_err(|_| {
+                                Error::Corrupt("format-2 shard row exceeds u32".into())
+                            })?,
+                        ),
+                        index,
+                    );
+                }
+            }
+            let _ = self.v2_rows.set(rows);
+        }
+        let index = self
+            .v2_rows
+            .get()
+            .expect("format-2 row lookup was initialized")
+            .get(&(shard, row))
+            .copied()
+            .ok_or_else(|| Error::Corrupt("format-2 posting references a missing row".into()))?;
+        Ok(&self.points[index])
     }
 
     fn point_for_tree(&self, repo: &Repository, root: Oid, tree: Oid) -> Result<&Point> {
@@ -126,7 +198,7 @@ pub(crate) fn diff_roots(repo: &Repository, left: Oid, right: Oid) -> Result<Dif
     for (id, point) in &left_points {
         match right_points.get(id) {
             None => removed.push(id.clone()),
-            Some(right_point) if right_point.tree != point.tree => changed.push(id.clone()),
+            Some(right_point) if right_point.point != point.point => changed.push(id.clone()),
             _ => {}
         }
     }
@@ -246,9 +318,16 @@ pub(crate) fn query_root_with_cache(
                     .expect("snapshot point cache was initialized")
                     .points,
             )
-        } else {
+        } else if meta.format_version == FORMAT_VERSION_V1 {
             exact_query(repo, root, &meta, query)
+        } else {
+            let points = read_all_points(repo, root)?
+                .into_values()
+                .collect::<Vec<_>>();
+            exact_query_points(root, &meta, query, &points)
         }
+    } else if meta.format_version == FORMAT_VERSION_V2 {
+        crate::root_v2::approximate_query(repo, root, &meta, query, cached_points)
     } else {
         let cached_points = cached_points.and_then(OnceLock::get);
         approximate_query(repo, root, &meta, query, cached_points)
@@ -257,7 +336,11 @@ pub(crate) fn query_root_with_cache(
 
 pub(crate) fn validate_root(repo: &Repository, root: Oid, full: bool) -> Result<ValidationReport> {
     let meta = read_meta(repo, root)?;
+    if meta.format_version == FORMAT_VERSION_V2 {
+        return crate::root_v2::validate_root(repo, root, &meta, full);
+    }
     validate_config(&meta.config()).map_err(|error| Error::Corrupt(error.to_string()))?;
+    validate_v1_index(&meta.index).map_err(|error| Error::Corrupt(error.to_string()))?;
     let points = read_stored_points(repo, root)?;
     if points.len() != meta.point_count {
         return Err(Error::Corrupt(format!(
@@ -302,14 +385,18 @@ pub(crate) fn validate_config(config: &CollectionConfig) -> Result<()> {
             "dimension must be between 1 and u32::MAX".into(),
         ));
     }
-    if config.index.tables == 0
-        || config.index.signature_bits == 0
-        || config.index.signature_bits > 64
-        || config.index.default_probes == 0
-        || config.index.default_candidate_limit == 0
-    {
+    if config.index.default_probes == 0 || config.index.default_candidate_limit == 0 {
         return Err(Error::Invalid(
-            "index tables, signature bits, probes, and candidate limit must be positive; signature bits must not exceed 64".into(),
+            "index probes and candidate limit must be positive".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_v1_index(index: &IndexConfig) -> Result<()> {
+    if index.tables == 0 || index.signature_bits == 0 || index.signature_bits > 64 {
+        return Err(Error::Invalid(
+            "format-1 index tables and signature bits must be positive; signature bits must not exceed 64".into(),
         ));
     }
     Ok(())
@@ -354,10 +441,11 @@ pub(crate) fn build_root(
     config: &CollectionConfig,
     points: &BTreeMap<PointId, Point>,
 ) -> Result<Oid> {
-    build_root_reusing(repo, config, points, &BTreeMap::new())
+    crate::root_v2::build_root(repo, config, points)
 }
 
-pub(crate) fn build_root_reusing(
+#[cfg(test)]
+fn build_root_v1(
     repo: &Repository,
     config: &CollectionConfig,
     points: &BTreeMap<PointId, Point>,
@@ -396,7 +484,7 @@ pub(crate) fn build_root_reusing(
     let mut index_builder = repo.treebuilder(None)?;
     index_builder.insert("lsh-v1", lsh_tree, TREE_MODE)?;
     let index_tree = index_builder.write()?;
-    let meta_blob = repo.blob(&canonical_json(&RootMeta::new(config, points.len()))?)?;
+    let meta_blob = repo.blob(&canonical_json(&RootMeta::new_v1(config, points.len()))?)?;
     let mut root = repo.treebuilder(None)?;
     root.insert("index", index_tree, TREE_MODE)?;
     root.insert("meta.json", meta_blob, BLOB_MODE)?;
@@ -414,6 +502,20 @@ pub(crate) fn update_root(
     if changes.is_empty() {
         return Ok(previous_root);
     }
+    let meta = read_meta(repo, previous_root)?;
+    if meta.format_version == FORMAT_VERSION_V2 {
+        return crate::root_v2::update_root(repo, previous_root, config, changes);
+    }
+    update_root_v1(repo, previous_root, config, final_point_count, changes)
+}
+
+fn update_root_v1(
+    repo: &Repository,
+    previous_root: Oid,
+    config: &CollectionConfig,
+    final_point_count: usize,
+    changes: &BTreeMap<PointId, PointChange>,
+) -> Result<Oid> {
     let projections = lsh_projections(&config.index, config.dimension);
     let mut new_trees = BTreeMap::new();
     for (id, change) in changes {
@@ -549,7 +651,10 @@ pub(crate) fn update_root(
     let mut index_builder = repo.treebuilder(Some(&old_index_tree))?;
     index_builder.insert("lsh-v1", lsh_tree, TREE_MODE)?;
     let index_tree = index_builder.write()?;
-    let meta_blob = repo.blob(&canonical_json(&RootMeta::new(config, final_point_count))?)?;
+    let meta_blob = repo.blob(&canonical_json(&RootMeta::new_v1(
+        config,
+        final_point_count,
+    ))?)?;
     let old_root_tree = repo.find_tree(previous_root)?;
     let mut root = repo.treebuilder(Some(&old_root_tree))?;
     root.insert("index", index_tree, TREE_MODE)?;
@@ -569,6 +674,7 @@ fn write_point_tree(repo: &Repository, point: &Point) -> Result<Oid> {
     Ok(builder.write()?)
 }
 
+#[cfg(test)]
 fn write_points_tree(
     repo: &Repository,
     prefixes: BTreeMap<String, Vec<(String, Oid)>>,
@@ -584,6 +690,7 @@ fn write_points_tree(
     Ok(root.write()?)
 }
 
+#[cfg(test)]
 fn write_lsh_tree(repo: &Repository, tables: BucketEntries) -> Result<Oid> {
     let mut lsh = repo.treebuilder(None)?;
     for (table, prefixes) in tables {
@@ -616,10 +723,12 @@ pub(crate) fn read_meta(repo: &Repository, root: Oid) -> Result<RootMeta> {
     if canonical_json(&meta)? != bytes {
         return Err(Error::Corrupt("meta.json is not canonical JSON".into()));
     }
-    if meta.format_version != FORMAT_VERSION
-        || meta.vector_codec != "f32le-v1"
-        || meta.git_object_format != "sha1"
-    {
+    let supported = match meta.format_version {
+        FORMAT_VERSION_V1 => meta.vector_codec == "f32le-v1" && meta.ivf.is_none(),
+        FORMAT_VERSION_V2 => meta.vector_codec == "f32le-sharded-v2" && meta.ivf.is_some(),
+        _ => false,
+    };
+    if !supported || meta.git_object_format != "sha1" {
         return Err(Error::Corrupt(format!(
             "unsupported format metadata: version {}, vector codec {}, object format {}",
             meta.format_version, meta.vector_codec, meta.git_object_format
@@ -629,7 +738,10 @@ pub(crate) fn read_meta(repo: &Repository, root: Oid) -> Result<RootMeta> {
 }
 
 pub(crate) fn read_all_points(repo: &Repository, root: Oid) -> Result<BTreeMap<PointId, Point>> {
-    Ok(read_stored_points(repo, root)?
+    if read_meta(repo, root)?.format_version == FORMAT_VERSION_V2 {
+        return crate::root_v2::read_all_points(repo, root);
+    }
+    Ok(read_stored_points_v1(repo, root)?
         .into_iter()
         .map(|(id, stored)| (id, stored.point))
         .collect())
@@ -640,6 +752,9 @@ pub(crate) fn read_point_by_id(
     root: Oid,
     id: &PointId,
 ) -> Result<Option<Point>> {
+    if read_meta(repo, root)?.format_version == FORMAT_VERSION_V2 {
+        return crate::root_v2::read_point_by_id(repo, root, id);
+    }
     let hash = id_hash(id);
     let points_oid = root_entry_oid(repo, root, "points")?;
     let points_tree = repo.find_tree(points_oid)?;
@@ -666,6 +781,24 @@ pub(crate) fn read_stored_points(
     repo: &Repository,
     root: Oid,
 ) -> Result<BTreeMap<PointId, StoredPoint>> {
+    if read_meta(repo, root)?.format_version == FORMAT_VERSION_V2 {
+        return Ok(crate::root_v2::read_all_points(repo, root)?
+            .into_iter()
+            .map(|(id, point)| {
+                (
+                    id,
+                    StoredPoint {
+                        point,
+                        tree: Oid::ZERO_SHA1,
+                    },
+                )
+            })
+            .collect());
+    }
+    read_stored_points_v1(repo, root)
+}
+
+fn read_stored_points_v1(repo: &Repository, root: Oid) -> Result<BTreeMap<PointId, StoredPoint>> {
     let mut result = BTreeMap::new();
     for (hash, point_tree) in point_tree_entries(repo, root)? {
         let point = read_point_tree(repo, point_tree)?;
@@ -1578,6 +1711,47 @@ mod tests {
     }
 
     #[test]
+    fn legacy_v1_roots_remain_readable_valid_and_mutable() {
+        let temp = TempDir::new().unwrap();
+        let repo = Repository::init_bare(temp.path()).unwrap();
+        let config = CollectionConfig::new(2);
+        let original = point("old", [1.0, 0.0], "v1");
+        let points = BTreeMap::from([(original.id.clone(), original)]);
+        let root = build_root_v1(&repo, &config, &points, &BTreeMap::new()).unwrap();
+        assert_eq!(root.to_string(), "b02e98c1f919ec065ac342812a5ccf6b62bc4217");
+        let meta = read_meta(&repo, root).unwrap();
+        assert_eq!(meta.format_version, FORMAT_VERSION_V1);
+        assert_eq!(read_all_points(&repo, root).unwrap().len(), 1);
+        assert!(validate_root(&repo, root, true).unwrap().valid);
+        drop(repo);
+
+        let engine = SnapshotEngine::open(temp.path()).unwrap();
+        assert_eq!(
+            engine
+                .open_snapshot(root.to_string())
+                .unwrap()
+                .info()
+                .unwrap()
+                .format_version,
+            1
+        );
+        let next = engine
+            .apply(
+                root.to_string(),
+                vec![SnapshotMutation::upsert(point(
+                    "new",
+                    [0.0, 1.0],
+                    "still-v1",
+                ))],
+            )
+            .unwrap();
+        let repo = Repository::open_bare(temp.path()).unwrap();
+        assert_eq!(read_meta(&repo, next.oid()).unwrap().format_version, 1);
+        assert_eq!(next.info().unwrap().point_count, 2);
+        assert!(next.validate(true).unwrap().valid);
+    }
+
+    #[test]
     fn historical_reads_and_compare_and_swap() {
         let (_temp, _db, collection) = database();
         let old = collection.root().unwrap();
@@ -1695,10 +1869,12 @@ mod tests {
         let repo = Repository::open(temp.path()).unwrap();
         let root = Oid::from_str(collection.root().unwrap().as_ref()).unwrap();
         let uncached = query_root_with_cache(&repo, root, query.clone(), None).unwrap();
+        assert_eq!(uncached.points.len(), 20);
+        assert_eq!(uncached.stats.vectors_scored, 50);
         let cold_cache = OnceLock::new();
         let cold_cached =
             query_root_with_cache(&repo, root, query.clone(), Some(&cold_cache)).unwrap();
-        assert!(cold_cache.get().is_none());
+        assert!(cold_cache.get().is_some());
         let cache = OnceLock::new();
         let mut exact_warmup = query.clone();
         exact_warmup.params.exact = Some(true);

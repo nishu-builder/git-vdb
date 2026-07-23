@@ -149,19 +149,23 @@ pub enum Distance {
     Cosine,
 }
 
-/// Deterministic LSH index construction and query defaults.
+/// Deterministic approximate-query defaults.
+///
+/// `tables`, `signature_bits`, and `projection_seed` describe the legacy
+/// format-version-1 LSH index. New format-version-2 roots use deterministic
+/// IVF-flat construction and ignore those three compatibility fields.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IndexConfig {
-    /// Number of independent LSH tables stored per point.
+    /// Legacy format-version-1 LSH table count.
     pub tables: usize,
-    /// Number of projection bits in each table signature.
+    /// Legacy format-version-1 projection bits per table signature.
     pub signature_bits: usize,
-    /// Seed used to deterministically derive projection vectors.
+    /// Legacy format-version-1 projection seed.
     pub projection_seed: u64,
     /// Point-count threshold at or below which queries default to exact search.
     pub full_scan_threshold: usize,
-    /// Default number of approximate buckets to probe.
+    /// Default number of approximate index partitions to probe.
     pub default_probes: usize,
     /// Default maximum number of approximate candidates to discover.
     pub default_candidate_limit: usize,
@@ -210,7 +214,9 @@ impl CollectionConfig {
         self
     }
 
-    /// Replaces the deterministic LSH configuration.
+    /// Replaces deterministic approximate-query defaults.
+    ///
+    /// The legacy LSH construction fields only affect format-version-1 roots.
     #[must_use]
     pub fn with_index(mut self, index: IndexConfig) -> Self {
         self.index = index;
@@ -334,7 +340,7 @@ impl Filter {
 pub struct QueryParams {
     /// Explicit mode override; `None` selects exact search for small collections.
     pub exact: Option<bool>,
-    /// Approximate buckets to probe, or zero to use the collection default.
+    /// Approximate index partitions to probe, or zero to use the default.
     pub probes: usize,
     /// Approximate candidate limit, or zero to use the collection default.
     pub candidate_limit: usize,
@@ -377,7 +383,7 @@ impl Query {
         query
     }
 
-    /// Creates a query that uses deterministic LSH candidate discovery.
+    /// Creates a query that uses deterministic approximate candidate discovery.
     pub fn approximate(vector: impl IntoIterator<Item = f32>, limit: usize) -> Self {
         let mut query = Self::new(vector, limit);
         query.params.exact = Some(false);
@@ -456,7 +462,7 @@ pub struct ScoredPoint {
 pub enum QueryMode {
     /// Every filter-eligible point was scored.
     Exact,
-    /// Candidates were discovered through deterministic LSH buckets.
+    /// Candidates were discovered through the root's deterministic index.
     Approximate,
 }
 
@@ -467,7 +473,7 @@ pub struct QueryStats {
     pub mode: QueryMode,
     /// Total points in the resolved collection root.
     pub collection_points: usize,
-    /// LSH buckets visited; zero for exact search.
+    /// Index partitions visited; zero for exact search.
     pub buckets_probed: usize,
     /// Distinct approximate candidates discovered.
     pub candidates_discovered: usize,
@@ -565,6 +571,8 @@ pub struct CollectionInfo {
     pub root: ObjectId,
     /// Named collection.
     pub name: String,
+    /// Persisted format version used by the resolved root.
+    pub format_version: u32,
     /// Number of points at the resolved root.
     pub point_count: usize,
     /// Collection configuration stored in the root.
@@ -578,6 +586,8 @@ pub struct CollectionInfo {
 pub struct SnapshotInfo {
     /// Deterministic root tree ID.
     pub root: ObjectId,
+    /// Persisted format version used by the root.
+    pub format_version: u32,
     /// Number of points in the root.
     pub point_count: usize,
     /// Collection configuration stored in the root.
@@ -664,7 +674,7 @@ pub struct DiffResult {
     pub changed: Vec<PointId>,
     /// Whether collection metadata differs.
     pub configuration_changed: bool,
-    /// Whether any approximate-index buckets differ.
+    /// Whether the persisted approximate index differs.
     pub buckets_changed: bool,
     /// Objects reachable from both roots.
     pub shared: ObjectStats,
@@ -683,7 +693,7 @@ pub struct ValidationReport {
     pub full: bool,
     /// Validated point count.
     pub point_count: usize,
-    /// Approximate-index buckets checked during full validation.
+    /// Approximate-index partitions checked during full validation.
     pub checked_buckets: usize,
     /// `true` when validation completed without finding corruption.
     pub valid: bool,

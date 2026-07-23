@@ -146,12 +146,6 @@ struct CreateCollection {
     distance: DistanceArg,
     #[arg(long)]
     vector_space: Option<String>,
-    #[arg(long, default_value_t = 12)]
-    lsh_tables: usize,
-    #[arg(long, default_value_t = 12)]
-    lsh_bits: usize,
-    #[arg(long, default_value_t = 0x6769_742d_7664_6231)]
-    projection_seed: u64,
     #[arg(long, default_value_t = 1_000)]
     full_scan_threshold: usize,
     #[arg(long, default_value_t = 96)]
@@ -202,12 +196,10 @@ fn run(cli: Cli) -> Result<()> {
                         distance: Distance::Cosine,
                         vector_space: args.vector_space,
                         index: IndexConfig {
-                            tables: args.lsh_tables,
-                            signature_bits: args.lsh_bits,
-                            projection_seed: args.projection_seed,
                             full_scan_threshold: args.full_scan_threshold,
                             default_probes: args.default_probes,
                             default_candidate_limit: args.default_candidate_limit,
+                            ..IndexConfig::default()
                         },
                     },
                 )?;

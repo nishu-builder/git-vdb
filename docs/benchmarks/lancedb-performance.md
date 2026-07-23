@@ -457,43 +457,74 @@ The x86_64 report is
 `/home/ubuntu/git-vdb-performance/format2-x86-100k.json`, SHA-256
 `6e45211a9af4d3981a36839c5445f89ed275464d15257c77455bd6ab41d0f1f8`.
 
-## Decision boundary and remaining uncertainty
+## Production format-version-2 graduation
 
-The documented stop condition is met: every Track-A rung has an outcome,
-version-1 packed behavior is characterized, the write/storage floor is
-attributed to required canonical Git work, and the isolated format-2 proposal
-and prototype have enough evidence for product review before production
-compatibility and migration obligations are created.
+The production implementation replaced per-point objects and twelve LSH paths
+with 64 deterministic typed-ID shards, split canonical ID/payload/vector blobs,
+an 8,192-point deterministic sample, stable power-of-two centroid bands, and
+IVF-flat postings. New builds emit version 2 unconditionally. Version-1 readers,
+full validation, and incremental mutation remain intact and the fixed v1 golden
+root remains unchanged.
 
-Accepted production hypotheses are partial top-k selection, bounded borrowed
-winners, f64 internal ranking for exact near ties, and reuse of the immutable
-decoded point view by approximate search. Together they reduce exact p50 65%,
-approximate p50 86%, and peak RSS 65% from the accepted starting point without
-changing a version-1 root or declared query result. Explicit Git packing is
-accepted as an operational recommendation for cold reopen and transfer, not as
-a hidden foreground build optimization.
+The first production gates used the unchanged harness on arm64 macOS. Across
+clustered and uniform 1,000-point smokes, v2 reduced build p50 by 20-35x,
+approximate p50 by 21-40x, and bytes per point by 3.3-3.4x. Exact p50 moved by
+2.6-3.4%, inside the 5% no-regression gate, while ANN recall improved or held at
+every k. On the pinned 10,000-point GloVe subset, v2 changed build from 22.074 s
+to 0.271 s, approximate p50 from 10.783 ms to 0.955 ms, bytes per point from
+1,299.9 to 137.5, and RSS from 118.0 MB to 110.3 MB. Exact p50 was 272 versus
+271 microseconds. Recall at k=1/10/100 improved from 0.917/0.817/0.600 to
+1.000/1.000/0.999, and all filtered result-count checks became complete.
 
-Rejected or deferred hypotheses are also material evidence. Query-norm hoisting
-improved the median by only 2.5% and remains unapplied. A3's second compact exact
-representation is not justified after reaching LanceDB-class exact behavior.
-Automatic foreground packing would add a measured 7.22-second maintenance
-phase. A full version-1 postings cache remains plausible but is deferred because
-it duplicates the structurally expensive LSH layout and cannot improve writes
-or storage. The format-2 prototype is not accepted production code: its ANN
-recall is lower at the frozen probe setting, filtered underfill persists,
-centroid/assignment work still recomputes globally, historical named-adapter
-reads are absent, and its 100,000-point timing is a single-run standalone Python
-prototype rather than five interleaved production repetitions.
+The acceptance run used the checksum-identical pinned 100,000-point GloVe-25
+dataset and the unchanged five-repetition protocol on an `m6i.2xlarge`: x86_64
+Linux, Intel Xeon Platinum 8375C, 8 logical CPUs, and 33.1 GB RAM. One cold
+process per repetition performed one unmeasured warmup per query mode before
+the 100 measured queries. The table reports p50 unless stated otherwise.
 
-The highest-leverage next decision is whether to authorize an opt-in production
-format-2 implementation and migration boundary. Before that authorization, a
-review must choose the acceptable ANN recall/probe operating point and the
-normative deterministic arithmetic strategy. If approved, the first production
-gate is cross-platform golden codecs/codebooks, full validation and historical
-named reads, followed by the unchanged five-repetition `m6i.2xlarge` protocol.
-If format 2 is not approved, the narrower alternative is an explicitly bounded
-version-1 postings cache with construction time and retained-memory limits; it
-cannot address the measured build, mutation, or storage floor.
+| Metric | Production v1 | Production v2 | Same-run LanceDB 0.34.0 |
+|---|---:|---:|---:|
+| Snapshot build | 51.973 s | 2.362 s | 2.494 s |
+| Exact query | 8.053 ms | 7.660 ms | 7.422 ms |
+| Approximate query | 27.693 ms | 4.396 ms | 1.861 ms |
+| ANN recall k=1/10/100 | 0.970/0.904/0.793 | 0.980/0.969/0.939 | 0.900/0.907/0.839 |
+| Approximate concurrency-4 throughput | 152.5 qps | 1,049.1 qps | 898.0 qps |
+| Peak process RSS | 879.5 MB | 746.8 MB | 877.0 MB |
+| Loose bytes per point | 1,186.1 | 105.2 | 206.1 |
+| 1% upsert | 4.158 s | 2.709 s | 6.4 ms |
+| 10% upsert | 13.256 s | 2.794 s | 9.3 ms |
+| 100% upsert | 97.051 s | 4.131 s | 50.9 ms |
+| 0.1%-filter recall@100 | 0.091, underfilled | 1.000, complete | 0.036, underfilled |
+
+Every v1 repetition produced root
+`2a00e66b7976398bbf70daf9c9ff9c20dfc7d90f`; every v2 repetition produced
+`cc67b419e854b10fca0d2c13f1c5719ac507b168`. All six mutation roots per format
+also matched across all repetitions. Exact IDs agree with the independent f64
+oracle at k=1/10/100 for snapshot, named, and every filter selectivity; maximum
+v2 score error is `2.981e-8`. V2 returns the requested result count at every
+unfiltered and filtered k. The multi-centroid v2 golden root and the legacy v1
+golden root are identical on arm64 macOS and x86_64 Linux.
+
+### Graduation decision and remaining gap
+
+Version 2 passes the production gate and is strictly better under the declared
+5% no-regression tolerance. It materially improves build, ANN latency and
+throughput, recall, filtered completeness, storage, RSS, every measured mutation
+fraction, named build/query behavior, and historical-read latency. Snapshot
+exact p50 and p99 also improve; its 2% p95 variation and 0.6% concurrency-4
+throughput variation are within the gate and are contradicted by the faster
+single-query and named exact results. No correctness or deterministic-identity
+metric regressed. Because the repository had no external users, v2 becomes the
+sole default rather than an opt-in path; old v1 roots remain supported without a
+bulk migration API.
+
+The remaining LanceDB gap is concentrated rather than across the board. V2 now
+builds slightly faster, uses about half the storage, retains less peak memory,
+has near-equal exact latency, exceeds LanceDB's concurrency-4 ANN throughput,
+and has higher ANN recall at this declared operating point. Its single-query ANN
+latency is still 2.4x slower and Git-native mutations remain hundreds of times
+slower. Those are honest next optimization targets; neither justifies retaining
+the much slower and less accurate version-1 default.
 
 ## Reproduction, artifacts, and commits
 
@@ -545,5 +576,10 @@ Accepted local commits, in chronological order, are:
 - `4b4b6d7` — 1%/10%/100% format-2 mutation measurements.
 
 Raw benchmark output, datasets, and generated repositories remain untracked.
-No format-version-1 bytes, default format selection, tests, workloads, or
-correctness thresholds were weakened, and no branch was pushed.
+The production graduation summaries are retained locally at
+`target/lancedb-results/v1-production-baseline-100k/summary.json` and
+`target/lancedb-results/v2-production-candidate-100k/summary.json`, with SHA-256
+values `f17596c0caeb1b4f79d2c1a6d700c234ca7f15c3c32409ab6a6bade8eeb4f7ef`
+and `be25faaeb82e3d195b4936100686b5d61e39320e4ad6620b3a85c771b1409dbb`.
+No format-version-1 bytes, workloads, or correctness thresholds were weakened,
+and no branch was pushed.

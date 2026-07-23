@@ -40,6 +40,7 @@
             || builtins.elem relativePath [
               "/docs"
               "/docs/format.md"
+              "/docs/format-v2.md"
               "/docs/snapshots.md"
             ];
         };

@@ -40,27 +40,33 @@
 //!
 //! # Semantics and compatibility
 //!
-//! Exact cosine search scores every eligible point. Approximate search uses a
-//! deterministic LSH index and may underfill or omit globally better points when
+//! Exact cosine search scores every eligible point. Approximate search uses the
+//! root's deterministic IVF-flat index and may omit globally better points when
 //! probe or candidate limits are exhausted; [`QueryResult::stats`] reports the
 //! work performed. Reads and validation never advance refs. Named writes create
 //! immutable objects first and then atomically compare-and-swap the collection
 //! ref, so [`Error::StaleRoot`] cannot silently overwrite a concurrent writer.
 //!
 //! The crate's semantic version and its persisted [`mod@format`] version are
-//! separate compatibility boundaries. Existing format-version-1 roots remain
-//! canonical regardless of physical Git packing.
+//! separate compatibility boundaries. New roots use format version 2; existing
+//! format-version-1 roots remain readable and canonical regardless of physical
+//! Git packing.
 
 pub mod adapter;
 mod codec;
 mod filter;
 pub mod model;
 mod root;
+mod root_v2;
 pub mod snapshot;
 
-/// The normative persisted format-version-1 specification.
-#[doc = include_str!("../docs/format.md")]
+/// The normative persisted format-version-2 specification.
+#[doc = include_str!("../docs/format-v2.md")]
 pub mod format {}
+
+/// The legacy persisted format-version-1 specification.
+#[doc = include_str!("../docs/format.md")]
+pub mod format_v1 {}
 
 /// Design notes for immutable root snapshots and named collection history.
 #[doc = include_str!("../docs/snapshots.md")]

@@ -67,7 +67,8 @@ output. Do not commit generated Git databases or benchmark output.
 
 ## Format and performance changes
 
-The bytes documented in `docs/format.md` define format version 1. A change that
+The bytes documented in `docs/format-v2.md` define the current format; the
+legacy `docs/format.md` remains normative for version-1 roots. A change that
 would alter an existing root's meaning or object ID requires explicit design
 discussion, a new format version, compatibility tests, and migration/read
 semantics. Never silently reinterpret an old root.
