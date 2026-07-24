@@ -1,6 +1,6 @@
 [package]
 name = "git-vdb"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.97"
 description = "An embedded vector database backed by immutable Git trees"
@@ -37,7 +37,10 @@ include = [
     "/docs/format.md",
     "/docs/format-v2.md",
     "/docs/snapshots.md",
-    "/python/**",
+    "/python/README.md",
+    "/python/pyproject.toml",
+    "/python/src/**/*.py",
+    "/python/tests/**/*.py",
 ]
 
 [lib]

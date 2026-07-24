@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "git-vdb"
-version = "0.4.0.dev0"
+version = "0.4.0"
 description = "Python client for the Git-native git-vdb vector database"
 readme = "README.md"
 requires-python = ">=3.10"
