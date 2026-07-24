@@ -46,6 +46,11 @@ impl Default for CollectionQueryCache {
 }
 
 impl Database {
+    /// Validates a collection name without opening or creating it.
+    pub fn validate_collection_name(name: &str) -> Result<()> {
+        validate_collection_name(name)
+    }
+
     /// Initializes a non-bare Git repository and opens it as a database.
     pub fn init(path: impl AsRef<Path>) -> Result<Self> {
         Self::init_with_options(path, false)
@@ -77,6 +82,11 @@ impl Database {
 
     fn repo(&self) -> Result<Repository> {
         Ok(Repository::open(&self.path)?)
+    }
+
+    /// Returns the resolved Git directory used by this database.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Creates an empty named collection with canonical configuration.
@@ -263,6 +273,65 @@ impl Collection {
         )?;
         Ok(WriteResult {
             root: root.into(),
+            affected_points,
+        })
+    }
+
+    /// Applies an ordered non-empty batch of upserts and deletions atomically.
+    ///
+    /// Every mutation observes the result of the preceding mutation. Immutable
+    /// objects are built first and the collection ref advances exactly once.
+    pub fn apply(&self, mutations: Vec<SnapshotMutation>) -> Result<MutationResult> {
+        if self.historical.is_some() {
+            return Err(Error::ReadOnly);
+        }
+        if mutations.is_empty() {
+            return Err(Error::Invalid("mutation batch must not be empty".into()));
+        }
+        let repo = self.repo()?;
+        let snapshot = current_snapshot(&repo, &self.name)?;
+        let points_before = read_meta(&repo, snapshot.root)?.point_count();
+        let operations = mutations.len();
+        let next =
+            SnapshotEngine::open(&self.db.path)?.apply(snapshot.root.to_string(), mutations)?;
+        let root = next.oid();
+        let points_after = next.info()?.point_count;
+        advance_collection(
+            &repo,
+            &self.name,
+            snapshot,
+            root,
+            &format!("apply {operations} mutations"),
+        )?;
+        Ok(MutationResult {
+            root: root.into(),
+            points_before,
+            points_after,
+            operations,
+        })
+    }
+
+    /// Restores a historical root as a new commit at the collection tip.
+    ///
+    /// History is preserved: this never rewinds or deletes existing commits.
+    pub fn restore(&self, revision: impl AsRef<str>) -> Result<WriteResult> {
+        if self.historical.is_some() {
+            return Err(Error::ReadOnly);
+        }
+        let repo = self.repo()?;
+        let current = current_snapshot(&repo, &self.name)?;
+        let target = resolve_snapshot(&repo, revision.as_ref())?;
+        let diff = diff_roots(&repo, current.root, target.root)?;
+        let affected_points = diff.added.len() + diff.removed.len() + diff.changed.len();
+        advance_collection(
+            &repo,
+            &self.name,
+            current,
+            target.root,
+            &format!("restore {}", revision.as_ref()),
+        )?;
+        Ok(WriteResult {
+            root: target.root.into(),
             affected_points,
         })
     }

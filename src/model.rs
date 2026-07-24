@@ -276,6 +276,42 @@ pub struct Range {
 #[serde(untagged)]
 #[non_exhaustive]
 pub enum Condition {
+    /// Matches when a dot-separated payload field exists.
+    HasField {
+        /// Dot-separated payload path that must exist.
+        has_field: String,
+    },
+    /// Matches when a scalar payload field is one of the supplied values.
+    FieldIn {
+        /// Dot-separated payload path.
+        key: String,
+        /// Accepted scalar values.
+        any: Vec<Value>,
+    },
+    /// Matches when a scalar payload field is not one of the supplied values.
+    FieldNotIn {
+        /// Dot-separated payload path.
+        key: String,
+        /// Rejected scalar values.
+        none: Vec<Value>,
+    },
+    /// Matches when an array payload field contains the supplied scalar value.
+    FieldContains {
+        /// Dot-separated payload path.
+        key: String,
+        /// Required array member.
+        contains: Value,
+    },
+    /// Matches when the reserved stored document contains a substring.
+    DocumentContains {
+        /// Case-sensitive substring required in the stored document.
+        document_contains: String,
+    },
+    /// Matches when the reserved stored document satisfies a regular expression.
+    DocumentRegex {
+        /// Rust regular expression applied to the stored document.
+        document_regex: String,
+    },
     /// Matches or range-checks a dot-separated payload field.
     Field {
         /// Dot-separated payload path.
@@ -321,6 +357,51 @@ impl Condition {
     pub fn has_id(ids: impl IntoIterator<Item = PointId>) -> Self {
         Self::HasId {
             has_id: ids.into_iter().collect(),
+        }
+    }
+
+    /// Creates a condition requiring a dot-separated payload path to exist.
+    pub fn exists(key: impl Into<String>) -> Self {
+        Self::HasField {
+            has_field: key.into(),
+        }
+    }
+
+    /// Creates a condition accepting any of a set of scalar field values.
+    pub fn is_in(key: impl Into<String>, values: impl IntoIterator<Item = Value>) -> Self {
+        Self::FieldIn {
+            key: key.into(),
+            any: values.into_iter().collect(),
+        }
+    }
+
+    /// Creates a condition rejecting a set of scalar field values.
+    pub fn not_in(key: impl Into<String>, values: impl IntoIterator<Item = Value>) -> Self {
+        Self::FieldNotIn {
+            key: key.into(),
+            none: values.into_iter().collect(),
+        }
+    }
+
+    /// Creates a condition requiring an array field to contain a scalar value.
+    pub fn contains(key: impl Into<String>, value: impl Into<Value>) -> Self {
+        Self::FieldContains {
+            key: key.into(),
+            contains: value.into(),
+        }
+    }
+
+    /// Creates a case-sensitive substring condition over the stored document.
+    pub fn document_contains(value: impl Into<String>) -> Self {
+        Self::DocumentContains {
+            document_contains: value.into(),
+        }
+    }
+
+    /// Creates a regular-expression condition over the stored document.
+    pub fn document_regex(value: impl Into<String>) -> Self {
+        Self::DocumentRegex {
+            document_regex: value.into(),
         }
     }
 }
@@ -569,6 +650,19 @@ pub struct WriteResult {
     pub root: ObjectId,
     /// Number of submitted upserts or points actually removed.
     pub affected_points: usize,
+}
+
+/// The outcome of one atomic mixed-mutation batch.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MutationResult {
+    /// New deterministic collection root.
+    pub root: ObjectId,
+    /// Number of points before the mutation batch.
+    pub points_before: usize,
+    /// Number of points after the mutation batch.
+    pub points_after: usize,
+    /// Number of ordered mutation operations applied.
+    pub operations: usize,
 }
 
 /// A count and the immutable root from which it was read.

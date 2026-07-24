@@ -1,8 +1,9 @@
 //! A small persistent facade for common embedded vector-database operations.
 
 use crate::{
-    Collection, CollectionConfig, Database, DeleteSelector, Error, GetRequest, Point, PointId,
-    Query, Record, Result, ScoredPoint, WriteResult,
+    Collection, CollectionConfig, Database, DeleteSelector, Error, Filter, GetRequest, GetResult,
+    MutationResult, ObjectId, Point, PointId, Query, QueryResult, Record, Result, ScoredPoint,
+    SnapshotMutation, WriteResult,
 };
 use git2::ErrorCode;
 use std::fs;
@@ -153,6 +154,28 @@ impl CollectionHandle {
             .points)
     }
 
+    /// Executes a detailed vector query without leaving the common facade.
+    pub fn query(&self, query: Query) -> Result<QueryResult> {
+        self.advanced()?.query(query)
+    }
+
+    /// Executes detailed vector queries in input order.
+    pub fn query_batch(
+        &self,
+        queries: impl IntoIterator<Item = Query>,
+    ) -> Result<Vec<QueryResult>> {
+        let collection = self.advanced()?;
+        queries
+            .into_iter()
+            .map(|query| collection.query(query))
+            .collect()
+    }
+
+    /// Retrieves records using IDs, filters, pagination, and include controls.
+    pub fn get(&self, request: GetRequest) -> Result<GetResult> {
+        self.advanced()?.get(request)
+    }
+
     /// Retrieves points by typed ID with payload metadata included.
     pub fn get_ids(&self, ids: impl IntoIterator<Item = PointId>) -> Result<Vec<Record>> {
         Ok(self
@@ -173,9 +196,37 @@ impl CollectionHandle {
         })
     }
 
+    /// Deletes records selected by IDs, a filter, or both.
+    pub fn delete(&self, selector: DeleteSelector) -> Result<WriteResult> {
+        self.advanced()?.delete(selector)
+    }
+
+    /// Applies an ordered batch of upserts and deletions in one ref update.
+    pub fn apply(
+        &self,
+        mutations: impl IntoIterator<Item = SnapshotMutation>,
+    ) -> Result<MutationResult> {
+        self.advanced()?.apply(mutations.into_iter().collect())
+    }
+
     /// Returns the number of points in the collection.
     pub fn count(&self) -> Result<usize> {
         Ok(self.advanced()?.count(None)?.count)
+    }
+
+    /// Returns the number of points matching a payload or ID filter.
+    pub fn count_where(&self, filter: Filter) -> Result<usize> {
+        Ok(self.advanced()?.count(Some(filter))?.count)
+    }
+
+    /// Returns the current immutable collection root.
+    pub fn root(&self) -> Result<ObjectId> {
+        self.advanced()?.root()
+    }
+
+    /// Restores a historical root as a new history-preserving commit.
+    pub fn restore(&self, revision: impl AsRef<str>) -> Result<WriteResult> {
+        self.advanced()?.restore(revision)
     }
 
     /// Returns the first `limit` canonically ordered points with payloads.

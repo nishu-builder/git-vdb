@@ -109,6 +109,50 @@ fn filters_get_delete_and_count_use_typed_ids_and_dot_paths() {
 }
 
 #[test]
+fn filters_support_sets_existence_arrays_and_document_matching() {
+    let temp = TempDir::new().unwrap();
+    let db = Database::init(temp.path()).unwrap();
+    let collection = db.create_collection("c", CollectionConfig::new(2)).unwrap();
+    collection
+        .upsert(vec![
+            point(
+                "guide",
+                [1.0, 0.0],
+                json!({"document": "Git stores immutable trees", "kind": "guide", "tags": ["git", "rust"]}),
+            ),
+            point(
+                "note",
+                [0.0, 1.0],
+                json!({"document": "Vector search notes", "kind": "note"}),
+            ),
+        ])
+        .unwrap();
+
+    for filter in [
+        Filter::must([Condition::exists("tags")]),
+        Filter::must([Condition::is_in("kind", [json!("guide"), json!("api")])]),
+        Filter::must([Condition::contains("tags", "rust")]),
+        Filter::must([Condition::document_contains("immutable")]),
+        Filter::must([Condition::document_regex("(?i)git\\s+stores")]),
+    ] {
+        assert_eq!(collection.count(Some(filter)).unwrap().count, 1);
+    }
+    assert_eq!(
+        collection
+            .count(Some(Filter::must([Condition::not_in(
+                "kind",
+                [json!("note")],
+            )])))
+            .unwrap()
+            .count,
+        1
+    );
+    assert!(collection
+        .count(Some(Filter::must([Condition::document_regex("(")])))
+        .is_err());
+}
+
+#[test]
 fn full_validation_rejects_a_deliberately_corrupted_index() {
     let temp = TempDir::new().unwrap();
     let db = Database::init(temp.path()).unwrap();
@@ -212,18 +256,13 @@ fn cli_outputs_json_and_stock_git_can_transfer_and_maintain_objects() {
         .unwrap()
         .status
         .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(&repo)
-        .args([
-            "push",
-            remote.to_str().unwrap(),
-            "refs/git-vdb/collections/notes:refs/git-vdb/collections/notes",
-        ])
-        .output()
-        .unwrap()
-        .status
-        .success());
+    assert_success(Command::new("git").arg("-C").arg(&repo).args([
+        "remote",
+        "add",
+        "origin",
+        remote.to_str().unwrap(),
+    ]));
+    assert_success(Command::new(binary).args(["--db", repo.to_str().unwrap(), "push", "notes"]));
     assert_success(
         Command::new("git")
             .arg("--git-dir")
@@ -247,6 +286,81 @@ fn cli_outputs_json_and_stock_git_can_transfer_and_maintain_objects() {
             .arg("--git-dir")
             .arg(&remote)
             .args(["cat-file", "-t", root]),
+    );
+
+    let clone = temp.path().join("clone.git");
+    assert_success(Command::new(binary).args(["init", clone.to_str().unwrap(), "--bare"]));
+    assert_success(Command::new("git").arg("--git-dir").arg(&clone).args([
+        "remote",
+        "add",
+        "origin",
+        remote.to_str().unwrap(),
+    ]));
+    assert_success(Command::new(binary).args(["--db", clone.to_str().unwrap(), "pull", "notes"]));
+    let cloned_count = assert_success(Command::new(binary).args([
+        "--db",
+        clone.to_str().unwrap(),
+        "count",
+        "notes",
+    ]));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&cloned_count.stdout).unwrap()["count"],
+        2
+    );
+}
+
+#[test]
+fn cli_restore_preserves_history_and_restores_data() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("vectors.git");
+    let binary = env!("CARGO_BIN_EXE_git-vdb");
+    let first = assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "upsert",
+        "docs",
+        "--id",
+        "a",
+        "--vector",
+        "1,0",
+    ]));
+    let first_root = serde_json::from_slice::<Value>(&first.stdout).unwrap()["root"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "upsert",
+        "docs",
+        "--id",
+        "b",
+        "--vector",
+        "0,1",
+    ]));
+    let restored = assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "restore",
+        "docs",
+        &first_root,
+    ]));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&restored.stdout).unwrap()["root"],
+        first_root
+    );
+    let history = assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "history",
+        "docs",
+    ]));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&history.stdout).unwrap()["history"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
     );
 }
 
@@ -275,6 +389,9 @@ fn cli_first_use_auto_creates_and_accepts_files_stdin_and_inline_vectors() {
         "upsert",
         "documents",
         input.to_str().unwrap(),
+        "--batch-size",
+        "1",
+        "--progress",
     ]));
     assert_success(Command::new(binary).args([
         "--db",
@@ -328,6 +445,81 @@ fn cli_first_use_auto_creates_and_accepts_files_stdin_and_inline_vectors() {
     ]));
     let counted: Value = serde_json::from_slice(&counted.stdout).unwrap();
     assert_eq!(counted["count"], 3);
+}
+
+#[test]
+fn cli_accepts_inline_filters_pretty_output_and_diagnostics() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("vectors.git");
+    let binary = env!("CARGO_BIN_EXE_git-vdb");
+    assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "upsert",
+        "docs",
+        "--id",
+        "guide",
+        "--vector",
+        "1,0",
+        "--payload",
+        "{\"kind\":\"guide\"}",
+    ]));
+
+    let searched = assert_success(Command::new(binary).args([
+        "--db",
+        repo.to_str().unwrap(),
+        "--format",
+        "pretty",
+        "search",
+        "docs",
+        "--vector",
+        "1,0",
+        "--filter",
+        "{\"must\":[{\"key\":\"kind\",\"match\":{\"value\":\"guide\"}}]}",
+    ]));
+    let stdout = String::from_utf8(searched.stdout).unwrap();
+    assert!(stdout.contains("\n  \"root\""));
+
+    let doctor =
+        assert_success(Command::new(binary).args(["--db", repo.to_str().unwrap(), "doctor"]));
+    let doctor: Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert_eq!(doctor["valid"], true);
+    assert_eq!(doctor["collections"], 1);
+
+    let completions = assert_success(Command::new(binary).args(["completions", "bash"]));
+    assert!(String::from_utf8(completions.stdout)
+        .unwrap()
+        .contains("git-vdb"));
+}
+
+#[test]
+fn cli_streaming_import_preflights_before_the_first_batch() {
+    let temp = TempDir::new().unwrap();
+    let repo = temp.path().join("vectors.git");
+    let input = temp.path().join("invalid.jsonl");
+    fs::write(
+        &input,
+        "{\"id\":\"valid\",\"vector\":[1,0],\"payload\":{}}\nnot-json\n",
+    )
+    .unwrap();
+    let binary = env!("CARGO_BIN_EXE_git-vdb");
+    let output = Command::new(binary)
+        .args([
+            "--db",
+            repo.to_str().unwrap(),
+            "upsert",
+            "docs",
+            input.to_str().unwrap(),
+            "--batch-size",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(git2::Repository::open_bare(&repo)
+        .unwrap()
+        .find_reference("refs/git-vdb/collections/docs")
+        .is_err());
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {

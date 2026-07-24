@@ -78,18 +78,27 @@ pub mod guides {
     /// Keep embedding-model identities consistent.
     #[doc = include_str!("../docs/embeddings.md")]
     pub mod embeddings {}
+
+    /// Map common Chroma concepts onto the git-vdb API.
+    #[doc = include_str!("../docs/chroma-migration.md")]
+    pub mod chroma_migration {}
+
+    /// Connect document and vector frameworks through the public API or CLI.
+    #[doc = include_str!("../docs/integrations.md")]
+    pub mod integrations {}
 }
 
 pub use adapter::{Collection, Database};
 pub use model::{
     CollectionConfig, CollectionInfo, Condition, CountResult, DeleteSelector, DiffResult, Distance,
-    Filter, GetRequest, GetResult, HistoryEntry, IndexConfig, JsonObject, MatchValue, ObjectId,
-    ObjectStats, Point, PointId, Query, QueryMode, QueryParams, QueryResult, QueryStats, Range,
-    Record, ScoredPoint, SnapshotInfo, SnapshotMutation, ValidationReport, WriteResult,
+    Filter, GetRequest, GetResult, HistoryEntry, IndexConfig, JsonObject, MatchValue,
+    MutationResult, ObjectId, ObjectStats, Point, PointId, Query, QueryMode, QueryParams,
+    QueryResult, QueryStats, Range, Record, ScoredPoint, SnapshotInfo, SnapshotMutation,
+    ValidationReport, WriteResult,
 };
 pub use snapshot::{Snapshot, SnapshotEngine};
 pub use store::{open, CollectionHandle, Store};
-pub use text::{Document, Embedder, TextCollection};
+pub use text::{Document, DocumentHit, Embedder, TextCollection, TextQuery};
 #[cfg(feature = "fastembed")]
 pub use text::{FastEmbedInitOptions, FastEmbedModel, FastEmbedder};
 

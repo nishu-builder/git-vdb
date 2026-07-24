@@ -1,4 +1,7 @@
-use git_vdb::{open, CollectionConfig, Database, Error, Point, PointId};
+use git_vdb::{
+    open, CollectionConfig, Condition, Database, Error, Filter, GetRequest, Point, PointId, Query,
+    SnapshotMutation,
+};
 use serde_json::json;
 use std::fs;
 use std::sync::{Arc, Barrier};
@@ -137,4 +140,50 @@ fn metadata_requires_a_json_object() {
     assert!(Point::new("id", [1.0])
         .with_metadata(json!({"source": "guide.md"}))
         .is_ok());
+}
+
+#[test]
+fn facade_supports_filtered_operations_and_atomic_mutations() {
+    let temp = TempDir::new().unwrap();
+    let docs = open(temp.path().join("vectors.git"))
+        .unwrap()
+        .collection("docs");
+    docs.upsert(points()).unwrap();
+
+    let east = Filter::must([Condition::matches("label", "East")]);
+    let result = docs
+        .query(
+            Query::new([1.0, 0.0], 5)
+                .with_filter(east.clone())
+                .with_payload(),
+        )
+        .unwrap();
+    assert_eq!(result.points.len(), 1);
+    assert_eq!(docs.count_where(east.clone()).unwrap(), 1);
+    assert_eq!(
+        docs.get(GetRequest {
+            filter: Some(east.clone()),
+            with_payload: true,
+            ..GetRequest::default()
+        })
+        .unwrap()
+        .points
+        .len(),
+        1
+    );
+
+    let before = docs.root().unwrap();
+    docs.apply([
+        SnapshotMutation::delete_filter(east),
+        SnapshotMutation::upsert(
+            Point::new("west", [-1.0, 0.0])
+                .with_metadata(json!({"label": "West"}))
+                .unwrap(),
+        ),
+    ])
+    .unwrap();
+    assert_ne!(docs.root().unwrap(), before);
+    assert_eq!(docs.count().unwrap(), 2);
+    assert!(docs.get_ids([PointId::from("east")]).unwrap().is_empty());
+    assert_eq!(docs.get_ids([PointId::from("west")]).unwrap().len(), 1);
 }

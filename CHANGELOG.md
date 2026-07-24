@@ -7,6 +7,29 @@ continuing to read and write the same canonical format version.
 
 ## [Unreleased]
 
+### Added
+
+- added typed and batched document queries, facade-level detailed vector
+  operations, and atomic mixed-mutation batches;
+- added existence, inclusion/exclusion, array-containment, and stored-document
+  substring/regex filters with validation;
+- added local file indexing and text search to FastEmbed-enabled CLIs, bounded
+  streaming JSONL imports, inline filters, pretty/JSONL output, diagnostics, and
+  shell completions;
+- added history-preserving restore plus fast-forward-only collection push/pull
+  commands, Chroma migration guidance, and framework integration guidance.
+- added a dependency-free Python client with Chroma-shaped vector CRUD, query,
+  metadata/document filters, collection management, and diagnostics.
+
+### Changed
+
+- made document search the README front door, documented prebuilt release
+  binaries, and made visible quickstart examples copy-pasteable;
+- changed the implicit CLI database from the surrounding directory to the safer
+  `.git-vdb` child directory;
+- enabled the FastEmbed feature in release binaries so document indexing and
+  text search work without rebuilding the CLI.
+
 ## [0.3.0] - 2026-07-23
 
 ### Added
