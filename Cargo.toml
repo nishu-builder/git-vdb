@@ -29,12 +29,15 @@ include = [
     "/docs/filtering.md",
     "/docs/history.md",
     "/docs/embeddings.md",
+    "/docs/chroma-migration.md",
+    "/docs/integrations.md",
     "/docs/findings.md",
     "/docs/benchmarks/lancedb-performance.md",
     "/docs/specs/0001-simple-embedded-api.md",
     "/docs/format.md",
     "/docs/format-v2.md",
     "/docs/snapshots.md",
+    "/python/**",
 ]
 
 [lib]
@@ -51,9 +54,11 @@ path = "src/bin/git-vdb.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
 fastembed = { version = "5.17.3", optional = true, default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 git2 = "0.21"
 hex = "0.4"
+regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"

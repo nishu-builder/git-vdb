@@ -1,6 +1,6 @@
 //! Ref-free immutable snapshot construction, mutation, query, and validation.
 
-use crate::filter::matches_filter;
+use crate::filter::{matches_filter, validate_filter};
 use crate::root::{
     build_root, count_root, get_root, query_root_with_cache, read_all_points, read_meta,
     read_point_by_id, read_stored_points, update_root, validate_config, validate_point,
@@ -125,6 +125,11 @@ impl SnapshotEngine {
         let previous_root = exact_root(&repo, previous_root.as_ref())?;
         let meta = read_meta(&repo, previous_root)?;
         let config = meta.config();
+        for mutation in &mutations {
+            if let SnapshotMutation::DeleteFilter { filter } = mutation {
+                validate_filter(filter)?;
+            }
+        }
         if mutations
             .iter()
             .all(|mutation| !matches!(mutation, SnapshotMutation::DeleteFilter { .. }))

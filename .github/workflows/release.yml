@@ -38,7 +38,7 @@ jobs:
         run: rustup update stable --no-self-update
       - name: Build and archive
         run: |
-          cargo build --release --locked
+          cargo build --release --locked --features fastembed
           host=$(rustc -vV | sed -n 's/^host: //p')
           archive="git-vdb-${GITHUB_REF_NAME}-${host}.tar.gz"
           mkdir dist
@@ -65,7 +65,7 @@ jobs:
       - name: Build and archive
         shell: pwsh
         run: |
-          cargo build --release --locked
+          cargo build --release --locked --features fastembed
           $hostTriple = ((rustc -vV | Select-String '^host: ').Line -replace '^host: ', '')
           $archive = "git-vdb-$env:GITHUB_REF_NAME-$hostTriple.zip"
           New-Item -ItemType Directory -Path dist | Out-Null

@@ -88,3 +88,23 @@ jobs:
         run: rustup update stable --no-self-update
       - name: Build publishable archive
         run: cargo package --locked
+
+  python:
+    name: Python client
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Build CLI
+        run: cargo +1.97.1 build --locked
+      - name: Test Python client against CLI
+        env:
+          GIT_VDB_BIN: ${{ github.workspace }}/target/debug/git-vdb
+          PYTHONPATH: python/src
+        run: python3 -m unittest discover -s python/tests -v
+      - name: Build Python wheel
+        run: python3 -m pip wheel ./python --no-deps --wheel-dir /tmp/git-vdb-wheel

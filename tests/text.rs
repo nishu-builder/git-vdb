@@ -1,4 +1,4 @@
-use git_vdb::{open, Document, Embedder, Error, Result};
+use git_vdb::{open, Condition, Document, Embedder, Error, Filter, Result, TextQuery};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -58,6 +58,51 @@ fn documents_are_embedded_stored_and_queried_offline() {
             .as_deref(),
         Some("test/compass@1")
     );
+}
+
+#[test]
+fn typed_document_queries_support_filters_and_batches() {
+    let temp = TempDir::new().unwrap();
+    let documents = open(temp.path().join("documents.git"))
+        .unwrap()
+        .text_collection("docs", CompassEmbedder("test/compass@1"))
+        .unwrap();
+    documents
+        .upsert_documents([
+            Document::new("east-guide", "A guide about the east")
+                .with_metadata(json!({"kind": "guide"}))
+                .unwrap(),
+            Document::new("north-guide", "A guide about the north")
+                .with_metadata(json!({"kind": "guide"}))
+                .unwrap(),
+            Document::new("north-note", "A note about the north")
+                .with_metadata(json!({"kind": "note"}))
+                .unwrap(),
+        ])
+        .unwrap();
+
+    let hits = documents
+        .query(
+            TextQuery::new("north wind")
+                .limit(5)
+                .with_filter(Filter::must([Condition::matches("kind", "guide")])),
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].id.to_string(), "north-guide");
+    assert_eq!(hits[0].document, "A guide about the north");
+    assert_eq!(hits[0].metadata["kind"], "guide");
+    assert!(!hits[0].metadata.contains_key("document"));
+
+    let batches = documents
+        .query_batch([
+            TextQuery::new("east").limit(1),
+            TextQuery::new("north").limit(1),
+        ])
+        .unwrap();
+    assert_eq!(batches.len(), 2);
+    assert_eq!(batches[0][0].id.to_string(), "east-guide");
+    assert!(batches[1][0].document.contains("north"));
 }
 
 #[test]

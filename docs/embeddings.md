@@ -7,19 +7,22 @@ cargo add git-vdb --features fastembed
 ```
 
 ```rust,ignore
-use git_vdb::{open, Document, FastEmbedder};
+use git_vdb::{open, Document, FastEmbedder, TextQuery};
 
-# fn main() -> git_vdb::Result<()> {
-let db = open("./documents.git")?;
-let docs = db.text_collection("docs", FastEmbedder::try_new()?)?;
-docs.upsert_documents([Document::new("guide", "Git-native vector search")])?;
-let hits = docs.search_text("versioned search", 5)?;
-# Ok(())
-# }
+fn main() -> git_vdb::Result<()> {
+    let db = open("./documents.git")?;
+    let docs = db.text_collection("docs", FastEmbedder::try_new()?)?;
+    docs.upsert_documents([Document::new("guide", "Git-native vector search")])?;
+    let hits = docs.query(TextQuery::new("versioned search").limit(5))?;
+    println!("{}", hits[0].document);
+    Ok(())
+}
 ```
 
-The model downloads on first initialization, is cached for offline use, and is
-serialized behind the collection handle so concurrent calls remain safe. The
+The model downloads on first initialization, is cached in the platform user
+cache for offline use, and is serialized behind the collection handle so
+concurrent calls remain safe. Set `FASTEMBED_CACHE_DIR` to override the cache
+location. The
 feature is disabled by default, so vector-only builds never include FastEmbed,
 model downloads, or an ONNX runtime. The same path is compiled as
 `examples/text_fastembed.rs` whenever the feature is enabled.
@@ -30,7 +33,7 @@ The core database never downloads a model or calls a network service. Implement
 the small `Embedder` trait with a local model or provider client, then bind its
 stable model identity to a text collection:
 
-```rust
+```rust,no_run
 use git_vdb::{open, Document, Embedder, Result};
 
 #[derive(Clone, Debug)]
@@ -50,18 +53,17 @@ impl Embedder for ExampleEmbedder {
     }
 }
 
-# fn main() -> git_vdb::Result<()> {
-# let temporary = tempfile::TempDir::new()?;
-let db = open(temporary.path().join("documents.git"))?;
-let docs = db.text_collection("docs", ExampleEmbedder)?;
-docs.upsert_documents([
-    Document::new("east", "A document about the east"),
-    Document::new("north", "A document about the north"),
-])?;
-let hits = docs.search_text("north wind", 1)?;
-assert_eq!(hits[0].id.to_string(), "north");
-# Ok(())
-# }
+fn main() -> git_vdb::Result<()> {
+    let db = open("./documents.git")?;
+    let docs = db.text_collection("docs", ExampleEmbedder)?;
+    docs.upsert_documents([
+        Document::new("east", "A document about the east"),
+        Document::new("north", "A document about the north"),
+    ])?;
+    let hits = docs.search_text("north wind", 1)?;
+    assert_eq!(hits[0].id.to_string(), "north");
+    Ok(())
+}
 ```
 
 Document text is retained under the payload key `document`; application metadata

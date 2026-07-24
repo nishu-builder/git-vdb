@@ -4,7 +4,7 @@ use crate::codec::{
     canonical_json, decode_id, decode_payload, decode_vector, encode_id, encode_vector, id_hash,
     validate_vector_components,
 };
-use crate::filter::matches_filter;
+use crate::filter::{matches_filter, validate_filter};
 use crate::*;
 use git2::{ObjectType, Oid, Repository, Tree};
 use serde::{Deserialize, Serialize};
@@ -242,6 +242,9 @@ pub(crate) fn diff_roots(repo: &Repository, left: Oid, right: Oid) -> Result<Dif
 }
 
 pub(crate) fn get_root(repo: &Repository, root: Oid, request: GetRequest) -> Result<GetResult> {
+    if let Some(filter) = &request.filter {
+        validate_filter(filter)?;
+    }
     let points = read_all_points(repo, root)?;
     let selected_ids: BTreeSet<_> = request.ids.into_iter().collect();
     let mut records = points
@@ -273,6 +276,9 @@ pub(crate) fn count_root(
     root: Oid,
     filter: Option<Filter>,
 ) -> Result<CountResult> {
+    if let Some(filter) = &filter {
+        validate_filter(filter)?;
+    }
     let meta = read_meta(repo, root)?;
     let count = if let Some(filter) = filter {
         read_all_points(repo, root)?
@@ -422,6 +428,9 @@ fn validate_query(query: &Query, meta: &RootMeta) -> Result<()> {
         )));
     }
     validate_vector_components(&query.vector)?;
+    if let Some(filter) = &query.filter {
+        validate_filter(filter)?;
+    }
     if let Some(expected) = &query.expected_vector_space {
         if meta.vector_space.as_ref() != Some(expected) {
             return Err(Error::Invalid(format!(
