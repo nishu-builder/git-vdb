@@ -1,0 +1,1 @@
+run --base:@@=git+https://github.com/Metta-AI/caos?rev=8e44b8f51d97155c2287f47e6ae57eb4d4a23e20&dir=std/flake-builder --in:@=. --lock:@=DEEP-DEPS/flake.lock

@@ -1,7 +1,9 @@
 # Semantic search over Caos snapshots
 
-Status: planned. This document specifies implementation work; it does not
-claim that a Caos adapter, worker image, or semantic-search tool exists yet.
+Status: implemented and validated against pinned Caos revision `8e44b8f`.
+The [integration guide](../../integrations/caos/README.md) contains runnable
+commands; the [implementation report](../../integrations/caos/REPORT.md) records
+real-model execution, reuse traces, correctness and measured limitations.
 
 ## Invocation
 
@@ -253,15 +255,15 @@ Caches are derived accelerators and must not change persisted identity.
 
 The required goal is complete only when:
 
-- [ ] A clean consumer can run real semantic search through Caos with exact
+- [x] A clean consumer can run real semantic search through Caos with exact
       source citations and a documented pinned model.
-- [ ] Repeated work, edits, renames, deletions, and configuration changes exhibit
+- [x] Repeated work, edits, renames, deletions, and configuration changes exhibit
       the specified reuse/invalidation behavior in recorded traces.
-- [ ] Immutable text APIs are implemented, documented, and compatibility-tested.
-- [ ] Caos queries use lazy object access with measured correctness and costs.
-- [ ] Relevant checks pass and a reproducible report states limitations.
-- [ ] The default embedded library still operates without Caos.
-- [ ] Implementation changes are committed and published according to the
+- [x] Immutable text APIs are implemented, documented, and compatibility-tested.
+- [x] Caos queries use lazy object access with measured correctness and costs.
+- [x] Relevant checks pass and a reproducible report states limitations.
+- [x] The default embedded library still operates without Caos.
+- [x] Implementation changes are committed and published according to the
       initiating session's authorization.
 
 A wrapper, fake-embedding demo, warm-only benchmark, or written plan alone does

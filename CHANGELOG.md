@@ -7,6 +7,19 @@ continuing to read and write the same canonical format version.
 
 ## [Unreleased]
 
+### Added
+
+- immutable `TextSnapshot` document creation, reopen, batch queries and mutations
+  with embedding-space validation and no collection refs;
+- an optional format-2 `SnapshotReader` with local Git, directory and custom
+  object sources, selective shard reads and logical read counters;
+- a separately packaged Caos semantic-search worker with a pinned CPU model,
+  content-keyed embedding reuse, historical source citations and retained index
+  subtrees;
+- real Caos cache/provenance validation, fixed reader benchmarks and measured
+  implementation evidence. Existing APIs and canonical formats 1 and 2 remain
+  compatible.
+
 ## [0.4.0] - 2026-07-23
 
 ### Added

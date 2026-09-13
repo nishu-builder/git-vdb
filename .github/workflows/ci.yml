@@ -108,3 +108,18 @@ jobs:
         run: python3 -m unittest discover -s python/tests -v
       - name: Build Python wheel
         run: python3 -m pip wheel ./python --no-deps --wheel-dir /tmp/git-vdb-wheel
+
+  caos-contract:
+    name: Optional Caos adapter contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Test adapter without a server or model download
+        run: cargo +1.97.1 test --manifest-path integrations/caos/Cargo.toml --all-targets --locked
+      - name: Check Python entry points
+        run: python3 -m py_compile integrations/caos/embed.py integrations/caos/benchmark.py integrations/caos/smoke.py integrations/caos/profile_model.py integrations/caos/http_meter.py integrations/caos/transport_benchmark.py integrations/caos/prepare_corpus_benchmark.py

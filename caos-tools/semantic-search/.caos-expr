@@ -1,0 +1,9 @@
+HELP=<<END
+Search a source snapshot by meaning and return passages with file and line citations.
+@param query Natural-language question.
+@param [path] Relative file or directory to search; defaults to the source root.
+@param [limit] Maximum results, from 1 to 100; defaults to 10.
+@param [chunk-chars] Maximum Unicode characters per chunk, from 1 to 16384; defaults to 1200.
+@param [run-salt] Force fresh execution for validation; normally leave unset.
+END
+curry --base:@=DEEP-DEPS/worker --help=$HELP

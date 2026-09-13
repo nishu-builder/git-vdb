@@ -39,6 +39,7 @@ pub mod adapter;
 mod codec;
 mod filter;
 pub mod model;
+pub mod reader;
 mod root;
 mod root_v2;
 pub mod snapshot;
@@ -96,9 +97,10 @@ pub use model::{
     QueryResult, QueryStats, Range, Record, ScoredPoint, SnapshotInfo, SnapshotMutation,
     ValidationReport, WriteResult,
 };
+pub use reader::{DirectorySource, GitSource, SnapshotReadStats, SnapshotReader, SnapshotSource};
 pub use snapshot::{Snapshot, SnapshotEngine};
 pub use store::{open, CollectionHandle, Store};
-pub use text::{Document, DocumentHit, Embedder, TextCollection, TextQuery};
+pub use text::{Document, DocumentHit, Embedder, TextCollection, TextQuery, TextSnapshot};
 #[cfg(feature = "fastembed")]
 pub use text::{FastEmbedInitOptions, FastEmbedModel, FastEmbedder};
 

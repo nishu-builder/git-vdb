@@ -1,0 +1,9 @@
+../../src core-src
+../../docs core-docs
+../../Cargo.toml core-manifest
+../../Cargo.lock core-lock
+../../rust-toolchain.toml core-toolchain
+../../README.md core-readme
+../../LICENSE core-license
+../../llms.txt core-llms
+../../flake.lock flake.lock

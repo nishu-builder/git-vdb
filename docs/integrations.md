@@ -20,15 +20,21 @@ git-vdb --db vectors.git search docs --vector '[0.1,0.2]' --format json
 The CLI writes result data only to stdout and progress or errors to stderr, so it
 is safe to compose with subprocess-based tools.
 
-## Caos integration (planned)
+## Caos semantic source search
 
-The [Caos implementation goal](goals/caos-integration.md) specifies semantic
-search over immutable source snapshots, content-keyed embedding reuse, snapshot
-text APIs, and lazy object reads. It includes milestones, compatibility gates,
-and the evidence required before claiming the integration works.
+The optional [Caos adapter](../integrations/caos/README.md) provides
+`caos-tools/semantic-search` for natural-language queries over immutable source
+trees and historical commits. Results carry exact text, paths, line spans,
+source tree/commit IDs and file blob IDs. A pinned CPU MiniLM model runs from
+packaged assets, and unchanged file content reuses embedding jobs across edits,
+renames and queries.
 
-The starting boundary is `SnapshotEngine`: workers consume source data and
-return an index as an immutable Git tree. Caos-specific packaging and
-orchestration will live in an optional adapter, with independent dependencies.
-The adapter and agent tool are planned; they are not available in the current
-release.
+The adapter returns its index as a retained subtree and queries through the
+format-2 `SnapshotReader` object interface. It has independent dependencies and
+Nix packaging; the default core build needs neither Caos nor a model download.
+See the [measured implementation report](../integrations/caos/REPORT.md) for
+correctness, cache traces, cold/warm costs and limitations.
+
+For provider-independent immutable text workflows, use
+`SnapshotEngine::build_text`, `Snapshot::with_embedder`, and `TextSnapshot` as
+shown in [the embedding guide](embeddings.md#immutable-text-snapshots).

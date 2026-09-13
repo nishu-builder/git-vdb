@@ -36,10 +36,11 @@
             let
               relativePath = pkgs.lib.removePrefix (toString ./.) (toString path);
             in
-            craneLib.filterCargoSources path type
-            || relativePath == "/docs"
-            || pkgs.lib.hasPrefix "/docs/" relativePath
-            || relativePath == "/llms.txt";
+            !(relativePath == "/integrations" || pkgs.lib.hasPrefix "/integrations/" relativePath)
+            && (craneLib.filterCargoSources path type
+              || relativePath == "/docs"
+              || pkgs.lib.hasPrefix "/docs/" relativePath
+              || relativePath == "/llms.txt");
         };
 
         commonArgs = {

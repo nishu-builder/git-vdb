@@ -211,12 +211,7 @@ impl Store {
 
 impl<E: Embedder> TextCollection<E> {
     fn new(collection: CollectionHandle, embedder: E) -> Result<Self> {
-        let model_id = embedder.model_id().trim().to_owned();
-        if model_id.is_empty() {
-            return Err(Error::Invalid(
-                "embedding model identity must not be empty".into(),
-            ));
-        }
+        let model_id = model_identity(&embedder)?;
         if let Ok(existing) = collection.advanced() {
             let actual = existing.info()?.config.vector_space;
             if actual.as_deref() != Some(model_id.as_str()) {
@@ -290,31 +285,7 @@ impl<E: Embedder> TextCollection<E> {
         &self,
         queries: impl IntoIterator<Item = TextQuery>,
     ) -> Result<Vec<Vec<DocumentHit>>> {
-        let queries: Vec<TextQuery> = queries.into_iter().collect();
-        if queries.is_empty() {
-            return Ok(Vec::new());
-        }
-        let input: Vec<String> = queries.iter().map(|query| query.text.clone()).collect();
-        let vectors = self.embedder.embed(&input)?;
-        if vectors.len() != queries.len() {
-            return Err(Error::Invalid(format!(
-                "embedder returned {} vectors for {} text queries",
-                vectors.len(),
-                queries.len()
-            )));
-        }
-        let vector_queries = queries
-            .into_iter()
-            .zip(vectors)
-            .map(|(text, vector)| Query {
-                vector,
-                limit: text.limit,
-                filter: text.filter,
-                with_payload: true,
-                expected_vector_space: Some(self.model_id.clone()),
-                params: text.params,
-                ..Query::default()
-            });
+        let vector_queries = embed_queries(&self.embedder, &self.model_id, queries)?;
         self.collection
             .query_batch(vector_queries)?
             .into_iter()
@@ -328,43 +299,50 @@ impl<E: Embedder> TextCollection<E> {
     }
 
     fn embed_documents(&self, documents: impl IntoIterator<Item = Document>) -> Result<Vec<Point>> {
-        let documents: Vec<Document> = documents.into_iter().collect();
-        if documents.is_empty() {
-            return Err(Error::Invalid("document batch must not be empty".into()));
-        }
-        let input: Vec<String> = documents
-            .iter()
-            .map(|document| document.text.clone())
-            .collect();
-        let vectors = self.embedder.embed(&input)?;
-        if vectors.len() != documents.len() {
-            return Err(Error::Invalid(format!(
-                "embedder returned {} vectors for {} documents",
-                vectors.len(),
-                documents.len()
-            )));
-        }
-        documents
-            .into_iter()
-            .zip(vectors)
-            .map(|(document, vector)| {
-                let mut payload = document.metadata;
-                if payload
-                    .insert("document".into(), Value::String(document.text))
-                    .is_some()
-                {
-                    return Err(Error::Invalid(
-                        "document metadata reserves the key \"document\"".into(),
-                    ));
-                }
-                Ok(Point {
-                    id: document.id,
-                    vector,
-                    payload,
-                })
-            })
-            .collect()
+        embed_documents(&self.embedder, documents)
     }
+}
+
+fn embed_documents(
+    embedder: &impl Embedder,
+    documents: impl IntoIterator<Item = Document>,
+) -> Result<Vec<Point>> {
+    let documents: Vec<Document> = documents.into_iter().collect();
+    if documents.is_empty() {
+        return Err(Error::Invalid("document batch must not be empty".into()));
+    }
+    let input: Vec<String> = documents
+        .iter()
+        .map(|document| document.text.clone())
+        .collect();
+    let vectors = embedder.embed(&input)?;
+    if vectors.len() != documents.len() {
+        return Err(Error::Invalid(format!(
+            "embedder returned {} vectors for {} documents",
+            vectors.len(),
+            documents.len()
+        )));
+    }
+    documents
+        .into_iter()
+        .zip(vectors)
+        .map(|(document, vector)| {
+            let mut payload = document.metadata;
+            if payload
+                .insert("document".into(), Value::String(document.text))
+                .is_some()
+            {
+                return Err(Error::Invalid(
+                    "document metadata reserves the key \"document\"".into(),
+                ));
+            }
+            Ok(Point {
+                id: document.id,
+                vector,
+                payload,
+            })
+        })
+        .collect()
 }
 
 fn document_hit(point: ScoredPoint) -> Result<DocumentHit> {
@@ -381,4 +359,158 @@ fn document_hit(point: ScoredPoint) -> Result<DocumentHit> {
         metadata,
         score: point.score,
     })
+}
+
+/// A text query handle bound to one immutable snapshot and embedding space.
+///
+/// Mutations return a new vector snapshot; the original remains independently
+/// queryable. Bind the returned snapshot with `Snapshot::with_embedder` to keep
+/// using text queries.
+#[derive(Clone, Debug)]
+pub struct TextSnapshot<E> {
+    snapshot: crate::Snapshot,
+    embedder: E,
+    model_id: String,
+}
+
+impl crate::SnapshotEngine {
+    /// Embeds documents and builds a ref-free text snapshot.
+    ///
+    /// The dimension is explicit so empty corpora have a well-defined schema.
+    /// A supplied vector-space identity must agree with the embedder.
+    pub fn build_text<E: Embedder>(
+        &self,
+        mut config: crate::CollectionConfig,
+        documents: impl IntoIterator<Item = Document>,
+        embedder: E,
+    ) -> Result<TextSnapshot<E>> {
+        let model_id = model_identity(&embedder)?;
+        if config
+            .vector_space
+            .as_ref()
+            .is_some_and(|space| space != &model_id)
+        {
+            return Err(Error::Invalid(
+                "snapshot configuration and embedder use different vector spaces".into(),
+            ));
+        }
+        config.vector_space = Some(model_id);
+        let documents: Vec<_> = documents.into_iter().collect();
+        let points = if documents.is_empty() {
+            Vec::new()
+        } else {
+            embed_documents(&embedder, documents)?
+        };
+        self.build(config, points)?.with_embedder(embedder)
+    }
+}
+
+impl crate::Snapshot {
+    /// Binds text queries to this immutable snapshot after checking model identity.
+    pub fn with_embedder<E: Embedder>(&self, embedder: E) -> Result<TextSnapshot<E>> {
+        let model_id = model_identity(&embedder)?;
+        let actual = self.info()?.config.vector_space;
+        if actual.as_deref() != Some(model_id.as_str()) {
+            return Err(Error::Invalid(format!(
+                "snapshot uses vector space {actual:?}, expected {model_id:?}"
+            )));
+        }
+        Ok(TextSnapshot {
+            snapshot: self.clone(),
+            embedder,
+            model_id,
+        })
+    }
+}
+
+impl<E: Embedder> TextSnapshot<E> {
+    /// Returns the underlying immutable vector snapshot.
+    pub fn snapshot(&self) -> &crate::Snapshot {
+        &self.snapshot
+    }
+
+    /// Embeds and queries one text against this snapshot.
+    pub fn query(&self, query: TextQuery) -> Result<Vec<DocumentHit>> {
+        self.query_batch([query])?
+            .pop()
+            .ok_or_else(|| Error::Invalid("text query batch returned no result".into()))
+    }
+
+    /// Embeds a batch once and executes queries in input order against one root.
+    pub fn query_batch(
+        &self,
+        queries: impl IntoIterator<Item = TextQuery>,
+    ) -> Result<Vec<Vec<DocumentHit>>> {
+        embed_queries(&self.embedder, &self.model_id, queries)?
+            .into_iter()
+            .map(|query| {
+                self.snapshot
+                    .query(query)?
+                    .points
+                    .into_iter()
+                    .map(document_hit)
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Embeds replacements and returns a new immutable snapshot.
+    ///
+    /// Failed validation does not change this snapshot or create a ref.
+    pub fn upsert_documents(
+        &self,
+        documents: impl IntoIterator<Item = Document>,
+    ) -> Result<crate::Snapshot> {
+        let points = embed_documents(&self.embedder, documents)?;
+        self.snapshot
+            .apply(points.into_iter().map(SnapshotMutation::upsert).collect())
+    }
+
+    /// Returns a new immutable snapshot without the selected typed IDs.
+    pub fn delete_ids(&self, ids: impl IntoIterator<Item = PointId>) -> Result<crate::Snapshot> {
+        self.snapshot.apply(vec![SnapshotMutation::delete_ids(ids)])
+    }
+}
+
+fn model_identity(embedder: &impl Embedder) -> Result<String> {
+    let identity = embedder.model_id().trim().to_owned();
+    if identity.is_empty() {
+        return Err(Error::Invalid(
+            "embedding model identity must not be empty".into(),
+        ));
+    }
+    Ok(identity)
+}
+
+fn embed_queries(
+    embedder: &impl Embedder,
+    model_id: &str,
+    queries: impl IntoIterator<Item = TextQuery>,
+) -> Result<Vec<Query>> {
+    let queries: Vec<TextQuery> = queries.into_iter().collect();
+    if queries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let input: Vec<String> = queries.iter().map(|query| query.text.clone()).collect();
+    let vectors = embedder.embed(&input)?;
+    if vectors.len() != queries.len() {
+        return Err(Error::Invalid(format!(
+            "embedder returned {} vectors for {} text queries",
+            vectors.len(),
+            queries.len()
+        )));
+    }
+    Ok(queries
+        .into_iter()
+        .zip(vectors)
+        .map(|(text, vector)| Query {
+            vector,
+            limit: text.limit,
+            filter: text.filter,
+            with_payload: true,
+            expected_vector_space: Some(model_id.to_owned()),
+            params: text.params,
+            ..Query::default()
+        })
+        .collect())
 }
