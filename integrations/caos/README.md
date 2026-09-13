@@ -9,7 +9,7 @@ model download is added to the default git-vdb crate.
 
 Use a Linux Docker host with Nix and the pinned Caos host tools. A first build
 downloads toolchains, runtime dependencies, and the explicitly pinned model;
-leave several GB available for build and image storage. The worker performs
+allow at least 25 GiB of free build and image storage for a clean stack build. The worker performs
 inference from packaged files.
 
 ```sh
@@ -59,7 +59,8 @@ selected extensionless files are included. Generated build directories,
 dependency mounts, caches and index output directories are excluded. Empty or
 whitespace-only files produce no chunks. Files over 256 KiB, NUL-containing
 files and invalid UTF-8 are skipped after the blob has been fetched. Symlinks
-and nested Caos commit references are skipped. An explicitly selected root
+and nested Caos commit references are skipped. Non-UTF-8 path names fail the
+request; invalid UTF-8 file contents are skipped. An explicitly selected root
 commit is resolved to its source tree, and its commit identity remains
 provenance outside embedding requests.
 
@@ -67,7 +68,8 @@ Pass a containing immutable tree or commit using the ordinary typed Caos
 `in` argument to search historical source. A path scope is interpreted inside
 that selected source. A tracked subtree can be supplied with `--in:@=path/inside/this/checkout`.
 Use `--in:commit=<full-commit-id>` for an available historical commit; fetch
-that commit into the client repository first. The tool still comes from this
+that commit and its ancestry into the client repository first (avoid shallow
+fetches: the pinned server rejects shallow Git pushes). The tool still comes from this
 repository, while the selected source can come from another fetched repository.
 Source selection and worker implementation are separate: changing this
 integration or its declared core build dependencies versions the worker.
@@ -101,7 +103,7 @@ reproducibility is only claimed for the execution environments actually tested.
 The worker uses the general `SnapshotReader<SnapshotSource>` interface.
 It loads metadata, the codebook and selected postings before candidate
 ID/vector shards, and defers unfiltered payload reads until winners are known.
-The result's `reads` counts logical blob requests/bytes; `objects` lists
+The result's `reads` field counts logical blob requests/bytes; `objects` lists
 materialized Caos objects and their hashes. These are not compressed network
 byte counters. Exact search and broad filters can still visit every shard.
 

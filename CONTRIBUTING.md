@@ -19,7 +19,7 @@ orchestration remain outside the core crate. Optional workflow adapters may
 live under `integrations/` with independent dependencies, packaging, and tests;
 they must not add runtime or service requirements to the default library.
 The [Caos implementation goal](docs/goals/caos-integration.md) defines the
-planned adapter and the general snapshot capabilities it needs.
+adapter and the general snapshot capabilities it uses.
 
 ## Development setup
 

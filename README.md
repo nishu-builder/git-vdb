@@ -125,7 +125,8 @@ hits = docs.query(query_embeddings=[[0.9, 0.1]], n_results=1)
 - [Text and embedding models](docs/embeddings.md)
 - [Chroma migration map](docs/chroma-migration.md)
 - [Framework integrations](docs/integrations.md)
-- [Caos semantic-search implementation goal](docs/goals/caos-integration.md) (planned)
+- [Semantic source search with Caos](integrations/caos/README.md)
+- [Caos implementation evidence](integrations/caos/REPORT.md)
 - [Rust API reference](https://docs.rs/git-vdb)
 
 Advanced users can work directly with immutable snapshots, historical roots,

@@ -120,6 +120,6 @@ jobs:
       - name: Install pinned Rust
         run: rustup toolchain install 1.97.1 --profile minimal
       - name: Test adapter without a server or model download
-        run: cargo +1.97.1 test --manifest-path integrations/caos/Cargo.toml --locked
+        run: cargo +1.97.1 test --manifest-path integrations/caos/Cargo.toml --all-targets --locked
       - name: Check Python entry points
-        run: python3 -m py_compile integrations/caos/embed.py integrations/caos/benchmark.py
+        run: python3 -m py_compile integrations/caos/embed.py integrations/caos/benchmark.py integrations/caos/smoke.py integrations/caos/profile_model.py integrations/caos/http_meter.py integrations/caos/transport_benchmark.py integrations/caos/prepare_corpus_benchmark.py

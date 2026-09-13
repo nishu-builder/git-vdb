@@ -10,7 +10,9 @@ git-vdb is an embedded vector database stored entirely in Git.
 - docs/embeddings.md: embedding-model identity and text status
 - docs/chroma-migration.md: Chroma-to-git-vdb concept and import map
 - docs/integrations.md: framework and language-agnostic integration boundary
-- docs/goals/caos-integration.md: planned Caos semantic-search milestones and completion gates
+- integrations/caos/README.md: optional pinned Caos semantic source search and reuse
+- integrations/caos/REPORT.md: reproducible implementation evidence and limitations
+- docs/goals/caos-integration.md: Caos semantic-search milestones and completion gates
 - docs/snapshots.md: advanced immutable snapshot lifecycle
 - docs/format-v2.md: normative current persisted format
 - docs/format.md: legacy format-v1 compatibility

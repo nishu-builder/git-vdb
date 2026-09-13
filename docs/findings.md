@@ -1,5 +1,22 @@
 # Findings and benchmark status
 
+## Caos source retrieval (2026-09-13)
+
+The optional Caos integration now uses selective format-2 object reads in fresh
+worker invocations. On the pinned 3,233-passage Caos corpus, the declared
+one-probe/32-candidate query read 2,888,549 logical blob bytes versus 9,148,604
+for eager import, with identical reader results and recall@10 of 0.5. Broad
+queries scored all passages; the README payload filter read 96.4% of all blob
+bytes. These are workload-specific savings, not row-level or universally
+sublinear I/O.
+
+Fresh-process setup plus query improved, but repeated in-process queries
+regressed materially because selective readers decode shards again. The
+existing cached `Snapshot` remains the default local API. See the
+[implementation report](../integrations/caos/REPORT.md) for five-repetition
+latency/memory distributions, independent exact-oracle checks, actual HTTP
+body-byte measurements, cache traces and reproduction commands.
+
 ## Current conclusion
 
 Format version 2 is the production default. It combines deterministic 64-way

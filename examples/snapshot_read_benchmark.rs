@@ -53,6 +53,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Some("export") => {
             let directory = Path::new(args.get(2).ok_or("export needs directory")?);
             let snapshot = Snapshot::open_directory(directory.join("index"))?;
+            snapshot.validate(true)?;
             let points = snapshot
                 .get(GetRequest {
                     with_payload: true,
