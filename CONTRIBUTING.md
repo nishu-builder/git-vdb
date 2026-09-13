@@ -14,8 +14,12 @@ feature issue first. Early agreement matters because collection roots are a
 versioned persistence format, not an internal implementation detail.
 
 Keep changes within the project scope: an embedded Git-native vector database.
-Servers, model inference, workflow adapters, authentication, and
-application-specific concepts belong elsewhere.
+Servers, model inference runtimes, authentication, and application-specific
+orchestration remain outside the core crate. Optional workflow adapters may
+live under `integrations/` with independent dependencies, packaging, and tests;
+they must not add runtime or service requirements to the default library.
+The [Caos implementation goal](docs/goals/caos-integration.md) defines the
+planned adapter and the general snapshot capabilities it needs.
 
 ## Development setup
 

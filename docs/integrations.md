@@ -19,3 +19,16 @@ git-vdb --db vectors.git search docs --vector '[0.1,0.2]' --format json
 
 The CLI writes result data only to stdout and progress or errors to stderr, so it
 is safe to compose with subprocess-based tools.
+
+## Caos integration (planned)
+
+The [Caos implementation goal](goals/caos-integration.md) specifies semantic
+search over immutable source snapshots, content-keyed embedding reuse, snapshot
+text APIs, and lazy object reads. It includes milestones, compatibility gates,
+and the evidence required before claiming the integration works.
+
+The starting boundary is `SnapshotEngine`: workers consume source data and
+return an index as an immutable Git tree. Caos-specific packaging and
+orchestration will live in an optional adapter, with independent dependencies.
+The adapter and agent tool are planned; they are not available in the current
+release.

@@ -31,6 +31,7 @@ include = [
     "/docs/embeddings.md",
     "/docs/chroma-migration.md",
     "/docs/integrations.md",
+    "/docs/goals/caos-integration.md",
     "/docs/findings.md",
     "/docs/benchmarks/lancedb-performance.md",
     "/docs/specs/0001-simple-embedded-api.md",
