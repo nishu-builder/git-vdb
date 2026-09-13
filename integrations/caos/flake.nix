@@ -16,8 +16,12 @@
       let
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
         deepened = builtins.pathExists ./DEEP-DEPS/core-src;
-        coreFile = mount: relative:
-          if deepened then ./. + "/DEEP-DEPS/${mount}" else ../.. + "/${relative}";
+        # Copy declared components by content. Referring to a subpath of the
+        # enclosing flake would otherwise re-key the image for README/test edits.
+        component = name: path: builtins.path { inherit name path; };
+        workerFile = name: component ("git-vdb-caos-" + name) (./. + "/${name}");
+        coreFile = mount: relative: component ("git-vdb-" + mount)
+          (if deepened then ./. + "/DEEP-DEPS/${mount}" else ../.. + "/${relative}");
         toolchainSpec = builtins.fromTOML (builtins.readFile (coreFile "core-toolchain" "rust-toolchain.toml"));
         toolchain = pkgs.rust-bin.stable.${toolchainSpec.toolchain.channel}.minimal;
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
@@ -33,11 +37,11 @@
           cp ${coreFile "core-readme" "README.md"} $out/README.md
           cp ${coreFile "core-license" "LICENSE"} $out/LICENSE
           cp ${coreFile "core-llms" "llms.txt"} $out/llms.txt
-          cp ${./Cargo.toml} $out/integrations/caos/Cargo.toml
-          cp ${./Cargo.lock} $out/integrations/caos/Cargo.lock
-          cp -R ${./src}/. $out/integrations/caos/src/
+          cp ${workerFile "Cargo.toml"} $out/integrations/caos/Cargo.toml
+          cp ${workerFile "Cargo.lock"} $out/integrations/caos/Cargo.lock
+          cp -R ${workerFile "src"}/. $out/integrations/caos/src/
         '';
-        vendor = craneLib.vendorCargoDeps { cargoLock = ./Cargo.lock; };
+        vendor = craneLib.vendorCargoDeps { cargoLock = workerFile "Cargo.lock"; };
         common = {
           pname = "git-vdb-caos";
           version = "0.1.0";
@@ -60,7 +64,7 @@
           '';
 
         });
-        modelLock = builtins.fromJSON (builtins.readFile ./model.lock.json);
+        modelLock = builtins.fromJSON (builtins.readFile (workerFile "model.lock.json"));
         weights = pkgs.fetchurl {
           inherit (modelLock.files."model.onnx") url sha256;
         };
@@ -71,13 +75,13 @@
           mkdir -p $out
           ln -s ${weights} $out/model.onnx
           ln -s ${tokenizer} $out/tokenizer.json
-          cp ${./model.lock.json} $out/model.lock.json
+          cp ${workerFile "model.lock.json"} $out/model.lock.json
         '';
         python = pkgs.python3.withPackages (ps: [ ps.numpy ps.onnxruntime ps.tokenizers ]);
         embed = pkgs.writeShellScript "git-vdb-embed" ''
           export GIT_VDB_MODEL_DIR=${model}
           export TOKENIZERS_PARALLELISM=false
-          exec ${python}/bin/python ${./embed.py} "$@"
+          exec ${python}/bin/python ${workerFile "embed.py"} "$@"
         '';
         root = pkgs.runCommand "git-vdb-caos-worker-root" {} ''
           mkdir -p $out

@@ -30,7 +30,11 @@ def main():
     assert not output.is_relative_to(root), "keep output outside the source tree"
     assert args.runner_log.is_file(), "runner log must belong to the tested stack"
     def command(*arguments):
-        return subprocess.run([cli, *arguments], capture_output=True, text=True, check=True)
+        result = subprocess.run([cli, *arguments], capture_output=True, text=True)
+        if result.returncode:
+            print(result.stderr, flush=True)
+        result.check_returncode()
+        return result
     def tree_id(text):
         match = re.search(r"^tree ([0-9a-f]{40})$", text, re.M)
         assert match, text
