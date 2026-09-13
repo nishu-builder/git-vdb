@@ -52,13 +52,13 @@ def main():
         if chunk_chars is not None:
             kvs.append("--chunk-chars="+str(chunk_chars))
         request = command("prepare-request", "--base:hash="+tool, *kvs).stdout.strip()
-        before = json.loads(command("status", "--all", request).stdout)
+        before = json.loads(command("status", "--all", request).stdout or "null")
         offset = args.runner_log.stat().st_size
         started = time.monotonic()
         result = command("run", "--base:hash="+tool, *kvs) if direct else command("run-tool", "semantic-search", *kvs)
         elapsed = time.monotonic()-started
         result_id = tree_id(result.stdout)
-        trace = json.loads(command("status", "--all", request).stdout)
+        trace = json.loads(command("status", "--all", request).stdout or "null")
         with args.runner_log.open("rb") as log:
             log.seek(offset)
             dispatched = set(re.findall(rb"arg_tree ([0-9a-f]{40}) -> container", log.read()))
