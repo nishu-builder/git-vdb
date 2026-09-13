@@ -190,3 +190,28 @@ fn local_git_source_reads_the_same_immutable_root() {
         0
     );
 }
+
+#[test]
+fn near_ties_rank_before_public_f32_rounding() {
+    let temp = tempfile::tempdir().unwrap();
+    let snapshot = SnapshotEngine::ephemeral()
+        .unwrap()
+        .build(
+            CollectionConfig::new(2),
+            vec![
+                Point::new("a", [1.0, 0.00002]),
+                Point::new("b", [1.0, 0.00001]),
+            ],
+        )
+        .unwrap();
+    let directory = temp.path().join("snapshot");
+    snapshot.materialize(&directory).unwrap();
+    for exact in [true, false] {
+        let mut query = Query::new([1.0, 0.0], 2);
+        query.params.exact = Some(exact);
+        query.params.probes = 64;
+        let result = reader(&directory, snapshot.root()).query(query).unwrap();
+        assert_eq!(result.points[0].id, PointId::from("b"));
+        assert_eq!(result.points[0].score, result.points[1].score);
+    }
+}
