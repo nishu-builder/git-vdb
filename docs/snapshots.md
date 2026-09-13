@@ -60,3 +60,42 @@ historical reads, optimistic expected-root checks, fetch/push compatibility, and
 atomic ref updates. Their deterministic tree construction is delegated to the
 same snapshot engine, so rebuilding an equivalent point set through either layer
 produces the same root.
+
+## Selective object reads
+
+`SnapshotReader<S>` queries a canonical format-2 root through a
+`SnapshotSource`. `GitSource` reads directly from a pinned local Git tree;
+`DirectorySource` reads a materialized directory. External stores can implement
+`read_blob(path)` and `list(path)` to fetch only visited objects.
+
+```rust,no_run
+use git_vdb::{GitSource, ObjectId, Query, SnapshotReader};
+# fn main() -> git_vdb::Result<()> {
+let root: ObjectId = "0123456789012345678901234567890123456789".parse()?;
+let source = GitSource::new("vectors.git", &root)?;
+let mut reader = SnapshotReader::open(root, source)?;
+let hits = reader.query(Query::approximate([1.0, 0.0], 10).with_payload())?;
+println!("{:?}", reader.read_stats());
+# Ok(()) }
+```
+
+Approximate queries load metadata, the codebook, selected postings, and
+candidate ID/vector shards. Unfiltered searches load payload shards only for
+winners. Filters can require payloads before scoring. Exact queries read all
+ID/vector shards. Objects decoded within a query are reused, then dropped;
+the source owns caching between queries.
+
+`read_stats()` counts requested blobs, their uncompressed byte lengths, and
+directory listings, including metadata read at opening. It does **not** count
+compressed network traffic, tree bytes, physical disk reads, or cache misses.
+Format 2 still transfers whole shards: small candidate counts may touch most
+of its 64 shards. Existing `Snapshot` handles retain their decoded caches and
+are often better for repeated queries in a long-lived process.
+
+The source must serve immutable objects bound to the supplied root.
+`DirectorySource` rejects accessed symlinks but does not authenticate that
+directory's Git identity. The reader validates visited objects and metadata;
+it does not promise validation of unvisited payloads, postings, or the training
+sample. Use `Snapshot::open_directory` and `Snapshot::validate(true)` to import
+and fully validate an untrusted directory. Existing snapshot APIs continue to
+read and mutate formats 1 and 2; this additional reader supports format 2 only.

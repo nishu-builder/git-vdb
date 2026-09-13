@@ -18,8 +18,8 @@
         deepened = builtins.pathExists ./DEEP-DEPS/core-src;
         coreFile = mount: relative:
           if deepened then ./. + "/DEEP-DEPS/${mount}" else ../.. + "/${relative}";
-        toolchain = pkgs.rust-bin.fromRustupToolchainFile
-          (coreFile "core-toolchain" "rust-toolchain.toml");
+        toolchainSpec = builtins.fromTOML (builtins.readFile (coreFile "core-toolchain" "rust-toolchain.toml"));
+        toolchain = pkgs.rust-bin.stable.${toolchainSpec.toolchain.channel}.minimal;
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
         # Explicit source assembly avoids pulling the whole consumer tree into
         # the image build or creating a dependency cycle through its tools.

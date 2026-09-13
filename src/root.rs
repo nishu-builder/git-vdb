@@ -419,7 +419,7 @@ pub(crate) fn validate_point(point: &Point, config: &CollectionConfig) -> Result
     Ok(())
 }
 
-fn validate_query(query: &Query, meta: &RootMeta) -> Result<()> {
+pub(crate) fn validate_query(query: &Query, meta: &RootMeta) -> Result<()> {
     if query.vector.len() != meta.dimension {
         return Err(Error::Invalid(format!(
             "query has dimension {}, expected {}",
@@ -725,7 +725,11 @@ pub(crate) fn read_meta(repo: &Repository, root: Oid) -> Result<RootMeta> {
         ));
     }
     let bytes = read_named_blob(repo, &root_tree, "meta.json")?;
-    let meta: RootMeta = serde_json::from_slice(&bytes)?;
+    decode_meta(&bytes)
+}
+
+pub(crate) fn decode_meta(bytes: &[u8]) -> Result<RootMeta> {
+    let meta: RootMeta = serde_json::from_slice(bytes)?;
     if canonical_json(&meta)? != bytes {
         return Err(Error::Corrupt("meta.json is not canonical JSON".into()));
     }

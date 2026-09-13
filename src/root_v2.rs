@@ -717,7 +717,7 @@ pub(crate) fn validate_root(
     })
 }
 
-fn validate_ivf_meta(meta: &RootMeta) -> Result<()> {
+pub(crate) fn validate_ivf_meta(meta: &RootMeta) -> Result<()> {
     let ivf = meta
         .ivf
         .as_ref()
@@ -1059,7 +1059,7 @@ fn read_shard(
         .collect())
 }
 
-fn decode_ids(bytes: &[u8], shard: u16) -> Result<Vec<PointId>> {
+pub(crate) fn decode_ids(bytes: &[u8], shard: u16) -> Result<Vec<PointId>> {
     let sections = decode_offsets(bytes, IDS_MAGIC)?;
     let mut ids = Vec::with_capacity(sections.len());
     for section in sections {
@@ -1101,7 +1101,7 @@ fn decode_ids(bytes: &[u8], shard: u16) -> Result<Vec<PointId>> {
     Ok(ids)
 }
 
-fn decode_payloads(bytes: &[u8]) -> Result<Vec<JsonObject>> {
+pub(crate) fn decode_payloads(bytes: &[u8]) -> Result<Vec<JsonObject>> {
     decode_offsets(bytes, PAYLOADS_MAGIC)?
         .into_iter()
         .map(|section| {
@@ -1148,7 +1148,7 @@ fn decode_offsets<'a>(bytes: &'a [u8], magic: &[u8; 8]) -> Result<Vec<&'a [u8]>>
         .collect())
 }
 
-fn decode_vectors(bytes: &[u8]) -> Result<Vec<Vec<f32>>> {
+pub(crate) fn decode_vectors(bytes: &[u8]) -> Result<Vec<Vec<f32>>> {
     if bytes.len() < 16 || &bytes[..8] != VECTORS_MAGIC {
         return Err(Error::Corrupt("invalid format-2 vector header".into()));
     }
@@ -1220,7 +1220,7 @@ fn read_index(repo: &Repository, root: Oid, meta: &RootMeta) -> Result<V2SearchI
     })
 }
 
-fn decode_codebook(bytes: &[u8], expected_dimension: usize) -> Result<Vec<Vec<f32>>> {
+pub(crate) fn decode_codebook(bytes: &[u8], expected_dimension: usize) -> Result<Vec<Vec<f32>>> {
     if bytes.len() < 16 || &bytes[..8] != CODEBOOK_MAGIC {
         return Err(Error::Corrupt("invalid format-2 codebook header".into()));
     }
@@ -1322,7 +1322,7 @@ fn decode_sample(bytes: &[u8], expected_count: usize) -> Result<Vec<SampleEntry>
     Ok(sample)
 }
 
-fn decode_posting(bytes: &[u8]) -> Result<Vec<(u16, u32)>> {
+pub(crate) fn decode_posting(bytes: &[u8]) -> Result<Vec<(u16, u32)>> {
     if bytes.len() < 12 || &bytes[..8] != POSTING_MAGIC {
         return Err(Error::Corrupt("invalid format-2 posting header".into()));
     }
@@ -1496,7 +1496,7 @@ fn read_u32(bytes: &[u8]) -> Result<u32> {
     })?))
 }
 
-fn cosine_f64(left: &[f32], right: &[f32]) -> f64 {
+pub(crate) fn cosine_f64(left: &[f32], right: &[f32]) -> f64 {
     let mut dot = 0.0_f64;
     let mut left_norm = 0.0_f64;
     let mut right_norm = 0.0_f64;

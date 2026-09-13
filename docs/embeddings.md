@@ -81,3 +81,27 @@ explicit feature so the default vector database stays small and network-free.
 The persisted model space includes the FastEmbed model variant and adapter
 version. To use a different supported model, pass a `FastEmbedModel` to
 `FastEmbedder::try_with_model`.
+
+## Immutable text snapshots
+
+Use `SnapshotEngine::build_text(config, documents, embedder)` when your
+application owns snapshot naming and retention. It accepts the same `Document`,
+`Embedder`, and `TextQuery` types as named collections. The dimension is explicit,
+including for an empty corpus. The provider's identity becomes the snapshot's
+vector space; a conflicting configured identity is rejected before inference.
+
+`TextSnapshot::snapshot()` exposes the immutable root, materialization, and
+ordinary vector operations. Reopen a root with
+`engine.open_snapshot(root)?.with_embedder(provider)?`. Binding a mismatched
+provider fails before it can embed a query or mutation.
+
+`query` and `batch_query` return the existing `DocumentHit` structure. Batch
+queries embed all query strings in one provider call. `upsert_documents` and
+`delete_ids` return a new `Snapshot`; bind its provider explicitly when continuing
+with text operations. The original snapshot remains usable and no commits or
+refs are created. Identical final vectors, payloads, and configuration produce
+the same root as a clean build.
+
+See [the complete immutable text example](../examples/text_snapshot.rs). Its
+small fixture provider illustrates the API; the optional
+[Caos adapter](https://github.com/nishu-builder/git-vdb/tree/main/integrations/caos) packages a real text model.

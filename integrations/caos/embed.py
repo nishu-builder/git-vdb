@@ -16,7 +16,9 @@ import tokenizers
 MODEL = Path(os.environ.get("GIT_VDB_MODEL_DIR", "/model"))
 LOCK = json.loads((MODEL / "model.lock.json").read_text())
 SETTINGS = {
-    "model": LOCK,
+    "artifacts": {name: spec["sha256"] for name, spec in LOCK["files"].items()},
+    "inference": {key: value for key, value in LOCK.items()
+                  if key not in {"files", "repository", "revision", "license"}},
     "adapter_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     "onnxruntime": ort.__version__,
     "tokenizers": tokenizers.__version__,
@@ -32,6 +34,10 @@ SETTINGS = {
 IDENTITY = "minilm/" + hashlib.sha256(
     json.dumps(SETTINGS, sort_keys=True, separators=(",", ":")).encode()
 ).hexdigest()
+
+if sys.argv[1:] == ["--describe"]:
+    print(json.dumps({"identity": IDENTITY, "settings": SETTINGS}, sort_keys=True))
+    sys.exit(0)
 
 if sys.argv[1:] == ["--identity"]:
     print(IDENTITY)
