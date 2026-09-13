@@ -16,6 +16,7 @@ inference from packaged files.
 nix build github:Metta-AI/caos/8e44b8f51d97155c2287f47e6ae57eb4d4a23e20#caos-tools -o /tmp/caos-tools
 /tmp/caos-tools/bin/caosd up
 # Run from the root of this checkout:
+git remote add caos http://localhost:9090
 /tmp/caos-tools/bin/caos-cli run-tool semantic-search \
   --query='How do immutable snapshots preserve historical results?' \
   --path=src --limit=5
@@ -64,8 +65,10 @@ provenance outside embedding requests.
 
 Pass a containing immutable tree or commit using the ordinary typed Caos
 `in` argument to search historical source. A path scope is interpreted inside
-that selected source. A different checked-out source directory can be supplied
-with `--in:@=/absolute/source`; the tool still comes from this repository.
+that selected source. A tracked subtree can be supplied with `--in:@=path/inside/this/checkout`.
+Use `--in:commit=<full-commit-id>` for an available historical commit; fetch
+that commit into the client repository first. The tool still comes from this
+repository, while the selected source can come from another fetched repository.
 Source selection and worker implementation are separate: changing this
 integration or its declared core build dependencies versions the worker.
 
@@ -73,7 +76,8 @@ integration or its declared core build dependencies versions the worker.
 
 The orchestration creates one embedding request per distinct file blob with
 bounded batches of 32 chunks. Its inputs are file content, chunking settings
-and the pinned worker image. Paths and enclosing source/commit IDs belong to
+and the pinned worker image. The optional `run-salt` argument is propagated to
+all child jobs to force fresh execution for validation; ordinary calls omit it. Paths and enclosing source/commit IDs belong to
 a separate occurrence manifest. Identical files share embeddings while
 remaining distinct results; a rename updates paths, and deletions disappear
 from the newly assembled snapshot. Every index is assembled from the complete

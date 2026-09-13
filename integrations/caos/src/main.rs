@@ -56,6 +56,7 @@ fn curry(stage: &str, args: &[String]) -> Result<String> {
         format!("--stage={stage}"),
     ];
     tokens.extend_from_slice(args);
+    if let Some(salt) = optional("run-salt")? { tokens.push(format!("--run-salt={salt}")); }
     caos(&tokens.iter().map(String::as_str).collect::<Vec<_>>())
 }
 fn run_then(input: &str, run: &str, then: &str) -> Result<()> {

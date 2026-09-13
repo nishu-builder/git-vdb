@@ -50,6 +50,15 @@
         worker = craneLib.buildPackage (common // {
           cargoArtifacts = artifacts;
           doCheck = false;
+          # The build log names the executable precisely. The default installer
+          # asks Cargo about the parent core manifest, outside this worker's lock.
+          doNotPostBuildInstallCargoBinaries = true;
+          installPhaseCommand = ''
+            binary=$(${pkgs.jq}/bin/jq -r 'select(.reason == "compiler-artifact" and .target.name == "git-vdb-caos-worker" and .executable != null) | .executable' "$cargoBuildLog")
+            test -f "$binary"
+            install -Dm555 "$binary" "$out/bin/git-vdb-caos-worker"
+          '';
+
         });
         modelLock = builtins.fromJSON (builtins.readFile ./model.lock.json);
         weights = pkgs.fetchurl {
